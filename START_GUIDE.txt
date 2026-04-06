@@ -1,0 +1,62 @@
+DRAE MOBILE APP + ADMIN WEB START GUIDE
+
+1. MOBILE APP
+
+Project folder:
+C:\xampp\htdocs\DRAE MobApp\drae-mobapp-app
+
+Use this if new changes do not appear in Expo Go:
+cd "C:\xampp\htdocs\DRAE MobApp\drae-mobapp-app"
+npx expo start -c
+
+Normal start:
+cd "C:\xampp\htdocs\DRAE MobApp\drae-mobapp-app"
+npx expo start
+
+Then:
+- open Expo Go on your Android phone
+- scan the QR code
+
+Important:
+- if the profile avatar picker is not visible yet, stop Expo first
+- start again with: npx expo start -c
+- this clears the old Metro cache and loads the latest screen changes
+- advisory push notifications are limited in Expo Go (SDK 53+)
+- to test advisory notifications fully, use a development build instead of Expo Go
+
+2. ADMIN WEB
+
+Project folder:
+C:\xampp\htdocs\DRAE MobApp\drae-admin-web
+
+Start dev server:
+cd "C:\xampp\htdocs\DRAE MobApp\drae-admin-web"
+npm run dev
+
+Then open the local URL shown in terminal.
+Usually Vite shows something like:
+http://localhost:5173
+
+3. IF COMMANDS ARE NOT RECOGNIZED
+
+If node or npm is not recognized, open a new terminal window first.
+If needed, use:
+$env:Path = "C:\Program Files\nodejs;" + $env:Path
+
+Then run the commands again.
+
+4. QUICK TEST CHECKLIST
+
+Mobile:
+- go to Personal Information
+- check for "Profile Picture / Larawan"
+- tap the circle
+- choose a photo
+- save profile
+- go to Profile tab and confirm the picture appears there too
+
+Web:
+- open People page and check resident photos
+- open Reports page and check photo/audio preview
+- open Calls page and test hotline add/edit/delete
+- open Alerts page and test advisories posting

@@ -1,0 +1,66 @@
+.cdrrmo-loader-root {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #0a0a0a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cdrrmo-spinner-wrap {
+  width: 100px;
+  height: 100px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cdrrmo-loader-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  position: relative;
+  z-index: 2;
+  object-fit: contain;
+}
+
+.cdrrmo-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.cdrrmo-arc-track {
+  border: 3px solid rgba(255, 255, 255, 0.06);
+}
+
+.cdrrmo-arc-red {
+  border: 3px solid transparent;
+  border-top-color: #e02020;
+  border-right-color: #e02020;
+  animation: cdrrmo-spin 1.2s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite;
+}
+
+.cdrrmo-arc-green {
+  inset: 8px;
+  border: 2px solid transparent;
+  border-bottom-color: #2a9c2a;
+  border-left-color: #2a9c2a;
+  animation: cdrrmo-spin 1.8s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite reverse;
+}
+
+.cdrrmo-arc-yellow {
+  inset: 16px;
+  border: 1.5px solid transparent;
+  border-top-color: #e6c800;
+  animation: cdrrmo-spin 2.4s linear infinite;
+}
+
+@keyframes cdrrmo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

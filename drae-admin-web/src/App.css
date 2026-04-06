@@ -1,0 +1,404 @@
+body {
+  background: #ececec;
+}
+
+.dashboard-page {
+  max-width: 1260px;
+  margin: 20px auto;
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  min-height: calc(100vh - 40px);
+  border: 1px solid #d7d7d7;
+  background: #f6f6f6;
+}
+
+.sidebar {
+  border-right: 1px solid #dbdbdb;
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  background: #f4f4f4;
+}
+
+.seal {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.nav-btn {
+  width: 56px;
+  height: 56px;
+  border: 1px solid #9ca3af;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  color: #1f2937;
+}
+
+.nav-btn.active {
+  border-color: #1f6a45;
+  box-shadow: inset 0 0 0 1px #1f6a45;
+}
+
+.content {
+  padding: 14px 16px;
+}
+
+.topbar {
+  height: 54px;
+  border: 2px solid #1f6a45;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 30px;
+  color: #1d4f36;
+}
+
+.logo-small {
+  width: 30px;
+  height: 30px;
+}
+
+.avatar-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 50%;
+}
+
+.panel {
+  margin-top: 24px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  color: #0f172a;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.refresh-btn {
+  flex-shrink: 0;
+}
+
+.config-banner {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  color: #78350f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.config-banner code {
+  font-size: 12px;
+  background: #fff7ed;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.stat-card {
+  background: #fff;
+  border: 1px solid #c8d5ce;
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 112px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.stat-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.stat-value {
+  font-size: 32px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.1;
+}
+
+.stat-hint {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.stat-card--members {
+  border-top: 3px solid #1f6a45;
+}
+
+.stat-card--gobag {
+  border-top: 3px solid #b45309;
+}
+
+.stat-card--emergency {
+  border-top: 3px solid #b91c1c;
+}
+
+.stat-card--staff {
+  border-top: 3px solid #1d4ed8;
+}
+
+.stat-card--alerts {
+  border-top: 3px solid #a16207;
+}
+
+.stat-card--hotlines {
+  border-top: 3px solid #0f766e;
+}
+
+.pill-yes,
+.pill-no {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pill-yes {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pill-no {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.table-wrap {
+  border: 1px solid #c8d5ce;
+  background: #fff;
+  min-height: 560px;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1100px;
+}
+
+thead tr {
+  border-bottom: 2px solid #2f6d52;
+}
+
+th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #111827;
+  white-space: nowrap;
+}
+
+td {
+  border-bottom: 1px solid #edf2ef;
+  padding: 12px;
+  font-size: 13px;
+  color: #111827;
+  vertical-align: top;
+}
+
+.muted-text {
+  color: #64748b;
+}
+
+.resident-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid #d7e4dc;
+}
+
+.report-evidence-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #d7e4dc;
+}
+
+.report-audio {
+  width: 220px;
+}
+
+.status-select,
+.form-input,
+.form-textarea {
+  width: 100%;
+  border: 1px solid #b9c7bf;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  color: #1f2937;
+  background: #fff;
+}
+
+.status-select {
+  min-width: 150px;
+}
+
+.assign-select {
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.advisory-form {
+  background: #fff;
+  border: 1px solid #c8d5ce;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.form-textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.form-row,
+.advisory-actions,
+.advisory-item-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.action-button {
+  border: 1px solid #185437;
+  background: #1f6a45;
+  color: #fff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.action-button.secondary {
+  background: #f6fffa;
+  color: #185437;
+}
+
+.action-button.danger {
+  margin-left: 8px;
+  background: #fff5f5;
+  color: #b42318;
+  border-color: #f4b7b7;
+}
+
+.advisory-list {
+  display: grid;
+  gap: 12px;
+}
+
+.advisory-item {
+  background: #fff;
+  border: 1px solid #c8d5ce;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.hotline-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 120px auto;
+  align-items: end;
+}
+
+.advisory-item-header p {
+  margin: 6px 0 0;
+  color: #475569;
+}
+
+.severity-pill {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.severity-low {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.severity-medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.severity-high {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@media (max-width: 900px) {
+  .dashboard-page {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    justify-content: flex-start;
+    border-right: none;
+    border-bottom: 1px solid #dbdbdb;
+  }
+
+  .table-wrap {
+    min-height: 420px;
+  }
+
+  .form-row,
+  .advisory-actions,
+  .advisory-item-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hotline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-audio {
+    width: 180px;
+  }
+}
