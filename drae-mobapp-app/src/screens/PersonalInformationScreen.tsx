@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
 import { useAppData } from '../context/AppDataContext';
-import { saveProfileRemote } from '../services/supabaseService';
+import { getAuthUserEmail, saveProfileRemote } from '../services/supabaseService';
 import { alertPermissionBlocked, confirmPermissionStep } from '../utils/permissionDialogs';
 import { colors } from '../theme/colors';
 import { emptyPersonalInfo, PersonalInfo } from '../types/profile';
@@ -33,9 +33,19 @@ export default function PersonalInformationScreen({ navigation }: Props) {
   };
 
   useEffect(() => {
-    if (isLoaded) {
-      setForm(profile);
+    if (!isLoaded) {
+      return;
     }
+    void (async () => {
+      const authEmail = (await getAuthUserEmail()) ?? '';
+      const next: PersonalInfo = {
+        ...emptyPersonalInfo,
+        ...profile,
+        avatarUrl: profile.avatarUrl ?? '',
+        email: profile.email || authEmail,
+      };
+      setForm(next);
+    })();
   }, [isLoaded, profile]);
 
   const handlePickAvatar = async () => {
@@ -133,7 +143,7 @@ export default function PersonalInformationScreen({ navigation }: Props) {
         <Text style={styles.fieldLabel}>Contact Number / Numero ng Telepono</Text>
         <TextInput
           style={styles.input}
-          placeholder=""
+          placeholder="e.g. +639171234567 or 09171234567"
           keyboardType="phone-pad"
           value={form.contactNumber}
           onChangeText={(text) => updateForm('contactNumber', text)}
@@ -181,7 +191,7 @@ export default function PersonalInformationScreen({ navigation }: Props) {
         </Text>
         <TextInput
           style={styles.input}
-          placeholder=""
+          placeholder="e.g. +639171234567 or 09171234567"
           keyboardType="phone-pad"
           value={form.contactPersonNumber}
           onChangeText={(text) => updateForm('contactPersonNumber', text)}

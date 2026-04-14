@@ -15,10 +15,15 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryAddUsageDescription": "DRAE saves preparedness infographic PNGs to your photo library when you tap Download PNG.",
-        "NSPhotoLibraryUsageDescription": "DRAE needs access to save preparedness infographic PNGs to your gallery."
+        "NSPhotoLibraryUsageDescription": "DRAE needs access to save preparedness infographic PNGs to your gallery.",
+        "NSLocationWhenInUseUsageDescription": "DRAE can attach your approximate GPS to hazard reports so responders can prioritize by distance. Location is optional and only sent when you submit a report."
       }
     },
     "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",

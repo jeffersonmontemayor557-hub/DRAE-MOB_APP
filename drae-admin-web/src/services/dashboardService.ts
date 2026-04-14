@@ -1,11 +1,13 @@
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { createEphemeralAuthClient, isSupabaseConfigured, supabase } from '../lib/supabase';
 import type {
   Advisory,
   DashboardStats,
   Hotline,
   Report,
   Resident,
+  ResidentInput,
   ResidentWithReadiness,
+  StaffInput,
   StaffMember,
 } from '../types';
 
@@ -74,24 +76,36 @@ const fallbackStaff: StaffMember[] = [
     full_name: 'Maria L. Santos',
     phone: '09170001111',
     role: 'CDRRMO Field Responder',
+    hazard_types: ['Flood', 'Landslide'],
+    active: true,
+    profile_id: null,
   },
   {
     id: 'f2222222-2222-2222-2222-222222222222',
     full_name: 'Jose R. Ramos',
     phone: '09170002222',
     role: 'Fire & Rescue Liaison',
+    hazard_types: ['Fire', 'Earthquake'],
+    active: true,
+    profile_id: null,
   },
   {
     id: 'f3333333-3333-3333-3333-333333333333',
     full_name: 'Ana K. Cruz',
     phone: '09170003333',
     role: 'Operations Coordinator',
+    hazard_types: ['Others', 'Tropical Cyclone'],
+    active: true,
+    profile_id: null,
   },
   {
     id: 'f4444444-4444-4444-4444-444444444444',
     full_name: 'Leo P. Mendoza',
     phone: '09170004444',
     role: 'General Response Pool',
+    hazard_types: [],
+    active: true,
+    profile_id: null,
   },
 ];
 
@@ -102,6 +116,8 @@ const fallbackReports: Report[] = [
     created_at: '2026-03-17T08:20:00Z',
     hazard_type: 'Flood',
     location_text: 'Paliparan III main road',
+    latitude: 14.2997,
+    longitude: 120.9875,
     description: 'Waist-deep flood and stranded commuters.',
     status: 'submitted',
     evidence_url: null,
@@ -115,6 +131,8 @@ const fallbackReports: Report[] = [
     created_at: '2026-03-17T09:05:00Z',
     hazard_type: 'Fire',
     location_text: 'Salawag market',
+    latitude: 14.3272,
+    longitude: 120.9764,
     description: 'Small fire from electrical post.',
     status: 'in_progress',
     evidence_url: null,
@@ -128,6 +146,8 @@ const fallbackReports: Report[] = [
     created_at: '2026-03-17T10:45:00Z',
     hazard_type: 'Landslide',
     location_text: 'Langkaan hillside area',
+    latitude: 14.3457,
+    longitude: 120.9447,
     description: 'Soil movement near homes.',
     status: 'submitted',
     evidence_url: null,
@@ -141,6 +161,8 @@ const fallbackReports: Report[] = [
     created_at: '2026-03-17T11:10:00Z',
     hazard_type: 'Earthquake',
     location_text: 'Dasmarinas Bayan',
+    latitude: 14.3298,
+    longitude: 120.9371,
     description: 'Falling debris from old structure.',
     status: 'resolved',
     evidence_url: null,
@@ -154,6 +176,8 @@ const fallbackReports: Report[] = [
     created_at: '2026-03-17T12:30:00Z',
     hazard_type: 'Others',
     location_text: 'San Agustin II',
+    latitude: 14.3185,
+    longitude: 120.9288,
     description: 'Blocked drainage and rising water.',
     status: 'submitted',
     evidence_url: null,
@@ -171,6 +195,7 @@ const fallbackAdvisories: Advisory[] = [
       'Expect moderate rain this afternoon. Residents near flood-prone areas should prepare for possible evacuation.',
     severity: 'medium',
     source: 'CDRRMO Dasmarinas',
+    is_verified: true,
     is_active: true,
     created_at: '2026-03-17T13:30:00Z',
   },
@@ -180,6 +205,7 @@ const fallbackAdvisories: Advisory[] = [
     message: 'Use only official CDRRMO hotlines and verified advisories.',
     severity: 'low',
     source: 'CDRRMO Dasmarinas',
+    is_verified: true,
     is_active: true,
     created_at: '2026-03-17T14:00:00Z',
   },
@@ -201,7 +227,7 @@ export async function getResidents(): Promise<Resident[]> {
   const { data, error } = await supabase
     .from('profiles')
     .select(
-      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url',
+      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,user_id',
     )
     .order('created_at', { ascending: false });
 
@@ -226,7 +252,7 @@ export async function getResidentsWithReadiness(): Promise<ResidentWithReadiness
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
     .select(
-      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,created_at',
+      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,created_at,user_id',
     )
     .order('created_at', { ascending: false });
 
@@ -331,6 +357,20 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   };
 }
 
+function mapStaffRow(row: Record<string, unknown>): StaffMember {
+  const ht = row.hazard_types;
+  return {
+    id: String(row.id),
+    full_name: String(row.full_name ?? ''),
+    phone: row.phone != null ? String(row.phone) : null,
+    role: row.role != null ? String(row.role) : null,
+    hazard_types: Array.isArray(ht) ? ht.map((x) => String(x)) : [],
+    active: row.active !== false,
+    profile_id: row.profile_id != null ? String(row.profile_id) : null,
+  };
+}
+
+/** All staff (active and inactive) for admin CRUD; filter by active in the UI where needed. */
 export async function getStaffMembers(): Promise<StaffMember[]> {
   if (!isSupabaseConfigured || !supabase) {
     return fallbackStaff;
@@ -338,15 +378,151 @@ export async function getStaffMembers(): Promise<StaffMember[]> {
 
   const { data, error } = await supabase
     .from('staff_members')
-    .select('id,full_name,phone,role')
-    .eq('active', true)
+    .select('id,full_name,phone,role,hazard_types,active,profile_id')
     .order('full_name', { ascending: true });
 
   if (error) {
     console.error('getStaffMembers', error);
     return [];
   }
-  return (data ?? []) as StaffMember[];
+  return (data ?? []).map((row) => mapStaffRow(row as Record<string, unknown>));
+}
+
+export async function createResident(input: ResidentInput): Promise<string> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('profiles')
+    .insert({
+      full_name: input.full_name.trim() || null,
+      address: input.address.trim() || null,
+      contact_number: input.contact_number.trim() || null,
+      gender: input.gender.trim() || null,
+      age: input.age,
+      email: input.email.trim() || null,
+      contact_person: input.contact_person.trim() || null,
+      contact_person_number: input.contact_person_number.trim() || null,
+      avatar_url: input.avatar_url?.trim() || null,
+      updated_at: now,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw error;
+  }
+  return String(data.id);
+}
+
+export async function updateResident(id: string, input: ResidentInput): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      full_name: input.full_name.trim() || null,
+      address: input.address.trim() || null,
+      contact_number: input.contact_number.trim() || null,
+      gender: input.gender.trim() || null,
+      age: input.age,
+      email: input.email.trim() || null,
+      contact_person: input.contact_person.trim() || null,
+      contact_person_number: input.contact_person_number.trim() || null,
+      avatar_url: input.avatar_url?.trim() || null,
+      updated_at: now,
+    })
+    .eq('id', id);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deleteResident(id: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const { error } = await supabase.from('profiles').delete().eq('id', id);
+  if (error) {
+    throw error;
+  }
+}
+
+/** Clears Supabase Auth link only (does not delete the auth.users row). */
+export async function clearResidentAuthLink(profileId: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const { error } = await supabase.from('profiles').update({ user_id: null }).eq('id', profileId);
+  if (error) {
+    throw error;
+  }
+}
+
+export async function createStaffMember(input: StaffInput): Promise<string> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const name = input.full_name.trim();
+  if (!name) {
+    throw new Error('Staff name is required.');
+  }
+  const { data, error } = await supabase
+    .from('staff_members')
+    .insert({
+      full_name: name,
+      role: input.role.trim() || null,
+      phone: input.phone.trim() || null,
+      hazard_types: input.hazard_types,
+      active: input.active,
+      profile_id: input.profile_id || null,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw error;
+  }
+  return String(data.id);
+}
+
+export async function updateStaffMember(id: string, input: StaffInput): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const name = input.full_name.trim();
+  if (!name) {
+    throw new Error('Staff name is required.');
+  }
+  const { error } = await supabase
+    .from('staff_members')
+    .update({
+      full_name: name,
+      role: input.role.trim() || null,
+      phone: input.phone.trim() || null,
+      hazard_types: input.hazard_types,
+      active: input.active,
+      profile_id: input.profile_id || null,
+    })
+    .eq('id', id);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deleteStaffMember(id: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const { error } = await supabase.from('staff_members').delete().eq('id', id);
+  if (error) {
+    throw error;
+  }
 }
 
 export async function getReports(): Promise<Report[]> {
@@ -357,7 +533,7 @@ export async function getReports(): Promise<Report[]> {
   const { data, error } = await supabase
     .from('incident_reports')
     .select(
-      'id,reporter_name,created_at,hazard_type,location_text,description,status,evidence_url,audio_url,assigned_staff_id,staff_members(full_name,phone,role)',
+      'id,reporter_name,created_at,hazard_type,location_text,latitude,longitude,description,status,evidence_url,audio_url,assigned_staff_id,staff_members(full_name,phone,role)',
     )
     .order('created_at', { ascending: false });
 
@@ -455,7 +631,7 @@ export async function getAdvisories(): Promise<Advisory[]> {
 
   const { data, error } = await supabase
     .from('advisories')
-    .select('id,title,message,severity,source,is_active,created_at')
+    .select('id,title,message,severity,source,is_verified,is_active,created_at')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -469,6 +645,8 @@ type AdvisoryInput = {
   title: string;
   message: string;
   severity: 'low' | 'medium' | 'high';
+  /** When false, mobile app shows unverified / drill styling (no checkmark). */
+  isVerified: boolean;
 };
 
 export async function createAdvisory(input: AdvisoryInput) {
@@ -481,6 +659,7 @@ export async function createAdvisory(input: AdvisoryInput) {
     message: input.message,
     severity: input.severity,
     source: 'CDRRMO Dasmarinas',
+    is_verified: input.isVerified,
     is_active: true,
   });
 
@@ -502,4 +681,136 @@ export async function toggleAdvisoryActive(id: string, isActive: boolean) {
   if (error) {
     throw error;
   }
+}
+
+export type CreateMobileAppLoginResult =
+  | { ok: true; temporaryPassword: string }
+  | { ok: false; message: string };
+
+/** Strong one-time password for admin-created accounts (avoids ambiguous glyphs). */
+function generateTemporaryPassword(length = 20): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@%^&*-_';
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += alphabet[bytes[i]! % alphabet.length];
+  }
+  return out;
+}
+
+function formatSignUpErrorForAdmin(raw: string): string {
+  const m = raw.trim();
+  const lower = m.toLowerCase();
+  const lines: string[] = [m];
+
+  if (lower.includes('rate limit')) {
+    lines.push(
+      '',
+      'Supabase is temporarily limiting sign-ups and auth emails. Wait a few minutes, then try again.',
+      'While testing: Authentication → Providers → Email → disable “Confirm email” so fewer messages are sent.',
+      'Need many test accounts? Use Authentication → Users → Add user, then link the resident here (App logins), or clear profiles.user_id on the member and use Create login again.',
+    );
+    return lines.join('\n');
+  }
+
+  if (
+    lower.includes('already registered') ||
+    lower.includes('already been registered') ||
+    lower.includes('user already exists')
+  ) {
+    lines.push(
+      '',
+      'That email already has an Auth account. Remove or reuse it in the Dashboard, or use a different login email.',
+    );
+    return lines.join('\n');
+  }
+
+  if (lower.includes('invalid') && lower.includes('email')) {
+    lines.push(
+      '',
+      'Tip: The login email does not need to match the resident’s profile email in the table. Fictional domains in seed data (e.g. @email.com) are often rejected by Auth. Use a normal address (e.g. yourname@gmail.com) or a domain you control.',
+    );
+    return lines.join('\n');
+  }
+
+  return m;
+}
+
+/**
+ * Registers a Supabase Auth user (mobile app login) and sets profiles.user_id.
+ * Uses the anon key + signUp (no service role in the browser). Requires open RLS on profiles for updates.
+ */
+export async function createMobileAppLogin(params: {
+  email: string;
+  profileId: string;
+}): Promise<CreateMobileAppLoginResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+
+  const ephemeral = createEphemeralAuthClient();
+  if (!ephemeral) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+
+  const email = params.email.trim().toLowerCase();
+  if (!email) {
+    return {
+      ok: false,
+      message: 'Enter a valid login email.',
+    };
+  }
+
+  const temporaryPassword = generateTemporaryPassword();
+
+  const { data: existing, error: existingErr } = await supabase
+    .from('profiles')
+    .select('user_id')
+    .eq('id', params.profileId)
+    .maybeSingle();
+
+  if (existingErr) {
+    return { ok: false, message: existingErr.message };
+  }
+
+  if (existing?.user_id) {
+    return {
+      ok: false,
+      message:
+        'This resident already has a mobile login. To replace it, clear profiles.user_id in the SQL editor first.',
+    };
+  }
+
+  const { data, error } = await ephemeral.auth.signUp({
+    email,
+    password: temporaryPassword,
+  });
+
+  if (error) {
+    return { ok: false, message: formatSignUpErrorForAdmin(error.message) };
+  }
+
+  const userId = data.user?.id;
+  if (!userId) {
+    return {
+      ok: false,
+      message:
+        'No user id returned. In Supabase: Authentication → Providers → Email — disable “Confirm email” for local testing, then try again.',
+    };
+  }
+
+  const { error: upError } = await supabase
+    .from('profiles')
+    .update({ user_id: userId, must_change_password: true })
+    .eq('id', params.profileId);
+
+  if (upError) {
+    return {
+      ok: false,
+      message: `Account was created but linking failed: ${upError.message}. Link manually: update public.profiles set user_id = '${userId}' where id = '${params.profileId}';`,
+    };
+  }
+
+  return { ok: true, temporaryPassword };
 }

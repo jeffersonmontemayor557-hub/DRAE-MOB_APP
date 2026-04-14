@@ -10,11 +10,15 @@ import {
   RecordingPresets,
 } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
-import { useMemo, useState } from 'react';
+import * as Location from 'expo-location';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
+  Dimensions,
+  FlatList,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,9 +26,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../App';
+import { DASMARINAS_BARANGAYS } from '../constants/dasmarinasBarangays';
 import { useAppData } from '../context/AppDataContext';
-import { submitIncidentReport } from '../services/supabaseService';
+import { trySubmitIncidentReportOrQueue } from '../services/incidentReportQueue';
 import { alertPermissionBlocked, confirmPermissionStep } from '../utils/permissionDialogs';
 import { colors } from '../theme/colors';
 
@@ -32,10 +38,18 @@ type Props = NativeStackScreenProps<RootStackParamList, 'IncidentReport'>;
 
 const hazards = ['Landslide', 'Earthquake', 'Flood', 'Fire', 'Others'];
 
+const BARANGAY_MODAL_SHEET_HEIGHT = Math.min(
+  560,
+  Math.round(Dimensions.get('window').height * 0.72),
+);
+
 export default function IncidentReportScreen({ navigation, route }: Props) {
   const { profile, profileRecordId } = useAppData();
   const [hazard, setHazard] = useState(route.params?.prefillHazard ?? 'Landslide');
-  const [location, setLocation] = useState('');
+  const [barangay, setBarangay] = useState('');
+  const [locationDetail, setLocationDetail] = useState('');
+  const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
+  const [barangayQuery, setBarangayQuery] = useState('');
   const [description, setDescription] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [audioUri, setAudioUri] = useState<string | null>(null);
@@ -45,6 +59,20 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
   const playerSource = useMemo(() => (audioUri ? { uri: audioUri } : null), [audioUri]);
   const player = useAudioPlayer(playerSource, { updateInterval: 150 });
   const playerStatus = useAudioPlayerStatus(player);
+
+  useEffect(() => {
+    if (barangayPickerOpen) {
+      setBarangayQuery('');
+    }
+  }, [barangayPickerOpen]);
+
+  const filteredBarangays = useMemo(() => {
+    const q = barangayQuery.trim().toLowerCase();
+    if (!q) {
+      return DASMARINAS_BARANGAYS;
+    }
+    return DASMARINAS_BARANGAYS.filter((name) => name.toLowerCase().includes(q));
+  }, [barangayQuery]);
 
   const isRecording = recorderState.isRecording;
   const isPlayingAudio = playerStatus.playing;
@@ -154,26 +182,60 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
   };
 
   const submitReport = async () => {
+    if (!barangay) {
+      Alert.alert('Location', 'Please select the barangay where the incident occurred.');
+      return;
+    }
     if (!description.trim()) {
       Alert.alert('Missing details', 'Please provide incident details.');
       return;
     }
 
+    const locationText = locationDetail.trim()
+      ? `${barangay}, Dasmariñas City, Cavite — ${locationDetail.trim()}`
+      : `${barangay}, Dasmariñas City, Cavite`;
+
+    let latitude: number | null = null;
+    let longitude: number | null = null;
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status === 'granted') {
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        latitude = pos.coords.latitude;
+        longitude = pos.coords.longitude;
+      }
+    } catch {
+      /* GPS is optional; report still submits with barangay text only */
+    }
+
     setIsSubmitting(true);
     try {
-      const result = await submitIncidentReport({
+      const outcome = await trySubmitIncidentReportOrQueue({
         profileId: profileRecordId,
         reporterName: profile.fullName,
         reporterContact: profile.contactNumber,
         hazardType: hazard,
-        locationText: location,
+        locationText,
         description,
         photoUri,
         audioUri,
+        latitude,
+        longitude,
       });
 
-      const assignNote = result.assignedStaffName
-        ? `\n\nAssigned responder: ${result.assignedStaffName}.`
+      if (outcome.mode === 'queued') {
+        Alert.alert(
+          'Saved offline',
+          'No connection or the server was unreachable. Your report is stored on this device and will send automatically when you are online. You can check status under Profile → My Reports.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+        return;
+      }
+
+      const assignNote = outcome.result.assignedStaffName
+        ? `\n\nAssigned responder: ${outcome.result.assignedStaffName}.`
         : '';
 
       Alert.alert(
@@ -196,7 +258,7 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Incident Report</Text>
       <Text style={styles.subtitle}>
-        Submit hazards with optional photo evidence.
+        For incidents in Dasmariñas City, Cavite. Optional photo or voice evidence.
       </Text>
 
       <Text style={styles.label}>Hazard Type</Text>
@@ -214,13 +276,103 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
         ))}
       </View>
 
-      <Text style={styles.label}>Incident Location</Text>
+      <Text style={styles.label}>Barangay</Text>
+      <TouchableOpacity
+        style={styles.selectField}
+        onPress={() => setBarangayPickerOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Select barangay"
+      >
+        <Text style={barangay ? styles.selectFieldText : styles.selectFieldPlaceholder}>
+          {barangay || 'Select barangay…'}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={colors.primaryDark} />
+      </TouchableOpacity>
+
+      <Text style={styles.label}>Street / landmark (optional)</Text>
       <TextInput
         style={styles.input}
-        placeholder="Street / Barangay / Landmark"
-        value={location}
-        onChangeText={setLocation}
+        placeholder="e.g. near school, zone, purok"
+        value={locationDetail}
+        onChangeText={setLocationDetail}
       />
+
+      <Modal
+        visible={barangayPickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setBarangayPickerOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { height: BARANGAY_MODAL_SHEET_HEIGHT }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Barangay — Dasmariñas City</Text>
+              <TouchableOpacity
+                onPress={() => setBarangayPickerOpen(false)}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Text style={styles.modalCloseText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.modalSearchRow}>
+              <Ionicons name="search" size={20} color={colors.muted} style={styles.modalSearchIcon} />
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder="Search barangay…"
+                placeholderTextColor={colors.muted}
+                value={barangayQuery}
+                onChangeText={setBarangayQuery}
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="while-editing"
+                accessibilityLabel="Search barangays"
+              />
+              {barangayQuery.length > 0 ? (
+                <TouchableOpacity
+                  onPress={() => setBarangayQuery('')}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Ionicons name="close-circle" size={22} color={colors.muted} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <FlatList
+              style={styles.modalList}
+              data={filteredBarangays}
+              keyExtractor={(item) => item}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              ListEmptyComponent={
+                <Text style={styles.modalEmptyText}>
+                  No barangay matches &quot;{barangayQuery.trim()}&quot;. Try another spelling.
+                </Text>
+              }
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalRow}
+                  onPress={() => {
+                    setBarangay(item);
+                    setBarangayPickerOpen(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.modalRowText,
+                      item === barangay && styles.modalRowTextSelected,
+                    ]}
+                  >
+                    {item}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
 
       <Text style={styles.label}>Description</Text>
       <TextInput
@@ -297,6 +449,11 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
         </View>
       ) : null}
 
+      <Text style={styles.gpsHint}>
+        If you allow location when prompted, we attach approximate GPS to help CDRRMO prioritize by distance.
+        You can still submit without it.
+      </Text>
+
       <TouchableOpacity
         style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
         onPress={submitReport}
@@ -371,6 +528,112 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  selectField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  selectFieldText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 16,
+  },
+  selectFieldPlaceholder: {
+    flex: 1,
+    color: colors.muted,
+    fontSize: 16,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 24,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderBottomWidth: 0,
+    flexDirection: 'column',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.primaryDark,
+    flex: 1,
+  },
+  modalCloseText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  modalSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  modalSearchIcon: {
+    marginLeft: 2,
+  },
+  modalSearchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: colors.text,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  modalList: {
+    flex: 1,
+  },
+  modalEmptyText: {
+    textAlign: 'center',
+    color: colors.muted,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  modalRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+    backgroundColor: '#FFFFFF',
+  },
+  modalRowText: {
+    fontSize: 16,
+    color: colors.text,
+  },
+  modalRowTextSelected: {
+    color: colors.primary,
+    fontWeight: '700',
   },
   multiline: {
     minHeight: 110,
@@ -464,8 +727,16 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 10,
   },
+  gpsHint: {
+    marginTop: 14,
+    marginBottom: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.muted,
+    paddingHorizontal: 2,
+  },
   submitButton: {
-    marginTop: 18,
+    marginTop: 12,
     backgroundColor: colors.primary,
     borderRadius: 12,
     alignItems: 'center',

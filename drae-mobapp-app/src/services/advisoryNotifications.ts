@@ -61,6 +61,13 @@ export async function initializeAdvisoryNotifications() {
       lightColor: '#1a7a4a',
       sound: 'default',
     });
+    await Notifications.setNotificationChannelAsync('assignments', {
+      name: 'CDRRMO Assignments',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 150, 250],
+      lightColor: '#1a7a4a',
+      sound: 'default',
+    });
   }
 
   hasInitialized = true;
@@ -80,6 +87,31 @@ export async function notifyNewAdvisory(advisory: Advisory) {
       data: {
         advisoryId: advisory.id,
       },
+    },
+    trigger: null,
+  });
+}
+
+export type StaffAssignmentNotifyPayload = {
+  hazardType: string;
+  locationText: string;
+  reporterName?: string;
+};
+
+export async function notifyNewStaffAssignment(payload: StaffAssignmentNotifyPayload) {
+  if (!isNotificationSupported) {
+    return;
+  }
+  const Notifications = await getNotificationsModule();
+  const who = payload.reporterName ? `${payload.reporterName} · ` : '';
+  const body = `${who}${payload.hazardType} — ${payload.locationText || 'Location pending'}`;
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'New emergency assignment',
+      body,
+      sound: 'default',
+      data: { type: 'staff_assignment' },
+      ...(Platform.OS === 'android' ? { channelId: 'assignments' } : {}),
     },
     trigger: null,
   });

@@ -24,6 +24,8 @@ export type Advisory = {
   severity: 'low' | 'medium' | 'high';
   source: string;
   createdAt: string;
+  /** LGU / official source verification (requires DB column is_verified). */
+  isVerified: boolean;
 };
 
 export type MyIncidentReport = {
@@ -39,6 +41,18 @@ export type MyIncidentReport = {
   createdAt: string;
   assignedStaffName: string;
   assignedStaffPhone: string;
+};
+
+/** Incident assigned to the logged-in staff member (via staff_members.profile_id). */
+export type StaffAssignmentReport = {
+  id: string;
+  reporterName: string;
+  reporterContact: string;
+  hazardType: string;
+  locationText: string;
+  description: string;
+  status: string;
+  createdAt: string;
 };
 
 export const defaultHotlines: Hotline[] = [
@@ -84,6 +98,7 @@ export const defaultAdvisories: Advisory[] = [
     severity: 'medium',
     source: 'CDRRMO Dasmarinas',
     createdAt: new Date().toISOString(),
+    isVerified: true,
   },
   {
     id: '2',
@@ -93,6 +108,7 @@ export const defaultAdvisories: Advisory[] = [
     severity: 'low',
     source: 'CDRRMO Dasmarinas',
     createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+    isVerified: true,
   },
 ];
 
@@ -101,6 +117,244 @@ function requireSupabase() {
     throw new Error(supabaseConfigError);
   }
   return supabase;
+}
+
+export type ProfileWithMeta = {
+  id: string;
+  profile: PersonalInfo;
+  mustChangePassword: boolean;
+};
+
+function mapProfileRow(data: {
+  id: unknown;
+  full_name: string | null;
+  address: string | null;
+  contact_number: string | null;
+  gender: string | null;
+  age: number | null;
+  email: string | null;
+  contact_person: string | null;
+  contact_person_number: string | null;
+  avatar_url: string | null;
+  must_change_password?: boolean | null;
+}): ProfileWithMeta {
+  return {
+    id: String(data.id),
+    mustChangePassword: data.must_change_password === true,
+    profile: {
+      fullName: String(data.full_name ?? ''),
+      address: String(data.address ?? ''),
+      contactNumber: String(data.contact_number ?? ''),
+      gender: String(data.gender ?? ''),
+      age: data.age != null ? String(data.age) : '',
+      email: String(data.email ?? ''),
+      contactPerson: String(data.contact_person ?? ''),
+      contactPersonNumber: String(data.contact_person_number ?? ''),
+      avatarUrl: String(data.avatar_url ?? ''),
+    } satisfies PersonalInfo,
+  };
+}
+
+export async function getAuthSession() {
+  if (!isSupabaseConfigured || !supabase) {
+    return null;
+  }
+  const { data, error } = await supabase.auth.getSession();
+  if (error) {
+    return null;
+  }
+  return data.session ?? null;
+}
+
+export async function getAuthUserEmail() {
+  const session = await getAuthSession();
+  return session?.user.email ?? null;
+}
+
+/** User-facing sign-in error text plus common Supabase setup hints. */
+export function formatSignInErrorMessage(err: unknown): string {
+  const msg =
+    err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+      ? (err as { message: string }).message
+      : err instanceof Error
+        ? err.message
+        : 'Sign in failed.';
+
+  const lower = msg.toLowerCase();
+  const lines: string[] = [msg];
+
+  if (lower.includes('email not confirmed')) {
+    lines.push(
+      '',
+      'For local testing: Supabase Dashboard → Authentication → Providers → Email → turn off “Confirm email”, or open the confirmation link from your inbox.',
+    );
+    return lines.join('\n');
+  }
+
+  if (
+    lower.includes('invalid login credentials') ||
+    lower.includes('invalid email or password')
+  ) {
+    lines.push(
+      '',
+      'Common fixes:',
+      '• Auth users are not created by schema.sql or dummy_data.sql. Add each user under Dashboard → Authentication → Users → “Add user”, and set the same password you type in the app.',
+      '• When adding the user, enable “Auto Confirm User” (or disable “Confirm email” under Providers → Email).',
+      '• Reset the password for that user in the Dashboard if needed.',
+      '• Check that .env EXPO_PUBLIC_SUPABASE_URL matches this Supabase project.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** Sign-up and password-reset style errors (shared hints with sign-in where useful). */
+export function formatSignUpErrorMessage(err: unknown): string {
+  const msg =
+    err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+      ? (err as { message: string }).message
+      : err instanceof Error
+        ? err.message
+        : 'Sign up failed.';
+
+  const lower = msg.toLowerCase();
+  const lines: string[] = [msg];
+
+  if (lower.includes('rate limit')) {
+    lines.push(
+      '',
+      'Supabase is temporarily limiting sign-ups and auth emails. Wait a few minutes, then try again.',
+      'While testing: Authentication → Providers → Email → disable “Confirm email” so fewer messages are sent.',
+      'Need many test accounts? Create users under Authentication → Users in the Dashboard, or ask staff to use the admin App logins page instead of signing up repeatedly.',
+    );
+    return lines.join('\n');
+  }
+
+  if (
+    lower.includes('already registered') ||
+    lower.includes('already been registered') ||
+    lower.includes('user already exists')
+  ) {
+    lines.push('', 'Try “Log in” instead, or use “Forgot password” in Supabase / reset from the Dashboard.');
+    return lines.join('\n');
+  }
+
+  if (lower.includes('password') && (lower.includes('short') || lower.includes('least'))) {
+    lines.push('', 'Use at least 6 characters for your password.');
+    return lines.join('\n');
+  }
+
+  if (lower.includes('invalid') && lower.includes('email')) {
+    lines.push(
+      '',
+      'Tip: Use the same email stored on your resident profile (CDRRMO records). Some domains (e.g. made-up @email.com) are rejected—try Gmail or an address your project allows.',
+    );
+    return lines.join('\n');
+  }
+
+  return lines.join('\n');
+}
+
+export async function signInWithEmailPassword(email: string, password: string) {
+  const client = requireSupabase();
+  const { error } = await client.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  if (error) {
+    throw error;
+  }
+}
+
+/** Creates the Auth user. When email confirmation is off, a session is returned immediately. */
+export async function signUpWithEmailPassword(
+  email: string,
+  password: string,
+): Promise<{ needsEmailConfirmation: boolean }> {
+  const client = requireSupabase();
+  const { data, error } = await client.auth.signUp({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  if (error) {
+    throw error;
+  }
+  return { needsEmailConfirmation: !data.session };
+}
+
+/**
+ * If this Auth user has no profiles.user_id row yet, link the first unlinked profile whose email matches (case-insensitive).
+ * Used after self-service sign-up or first log-in (e.g. after confirming email).
+ */
+export async function tryLinkAuthUserToUnlinkedProfileByEmail(): Promise<
+  'linked' | 'skipped_already_linked' | 'no_session' | 'no_match' | 'ambiguous'
+> {
+  const client = requireSupabase();
+  const {
+    data: { user },
+    error: userErr,
+  } = await client.auth.getUser();
+  if (userErr || !user?.id || !user.email) {
+    return 'no_session';
+  }
+
+  const existing = await fetchProfileByAuthUserId(user.id);
+  if (existing) {
+    return 'skipped_already_linked';
+  }
+
+  const normalized = user.email.trim().toLowerCase();
+  const { data: rows, error } = await client.from('profiles').select('id,email').is('user_id', null);
+
+  if (error) {
+    throw error;
+  }
+
+  const matches = (rows ?? []).filter((r) => (r.email ?? '').trim().toLowerCase() === normalized);
+  if (matches.length === 0) {
+    return 'no_match';
+  }
+  if (matches.length > 1) {
+    return 'ambiguous';
+  }
+
+  const { error: upErr } = await client
+    .from('profiles')
+    .update({
+      user_id: user.id,
+      must_change_password: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', matches[0]!.id);
+
+  if (upErr) {
+    throw upErr;
+  }
+  return 'linked';
+}
+
+export async function signOutAuth() {
+  if (!isSupabaseConfigured || !supabase) {
+    return;
+  }
+  await supabase.auth.signOut();
+}
+
+export async function fetchProfileByAuthUserId(authUserId: string): Promise<ProfileWithMeta | null> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from('profiles')
+    .select(
+      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,must_change_password',
+    )
+    .eq('user_id', authUserId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return mapProfileRow(data);
 }
 
 export async function saveProfileRemote(
@@ -113,6 +367,11 @@ export async function saveProfileRemote(
   if (avatarUrl && !/^https?:\/\//i.test(avatarUrl)) {
     avatarUrl = await uploadFileToEvidenceBucket(avatarUrl, 'profile-avatars');
   }
+
+  const {
+    data: { user },
+  } = await client.auth.getUser();
+  const authUserId = user?.id ?? null;
 
   const payload = {
     full_name: profile.fullName,
@@ -127,9 +386,10 @@ export async function saveProfileRemote(
   };
 
   if (existingProfileId) {
+    const updatePayload = authUserId ? { ...payload, user_id: authUserId } : payload;
     const { data, error } = await client
       .from('profiles')
-      .update(payload)
+      .update(updatePayload)
       .eq('id', existingProfileId)
       .select('id,avatar_url')
       .single();
@@ -142,9 +402,11 @@ export async function saveProfileRemote(
     };
   }
 
+  const insertPayload = authUserId ? { ...payload, user_id: authUserId } : payload;
+
   const { data, error } = await client
     .from('profiles')
-    .insert(payload)
+    .insert(insertPayload)
     .select('id,avatar_url')
     .single();
   if (error) {
@@ -156,38 +418,44 @@ export async function saveProfileRemote(
   };
 }
 
-export async function fetchLatestProfile() {
+/** Profile row for the current Supabase Auth session (by profiles.user_id). */
+export async function fetchLatestProfile(): Promise<ProfileWithMeta | null> {
   if (!isSupabaseConfigured || !supabase) {
     return null;
   }
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select(
-      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,created_at',
-    )
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const uid = sessionData.session?.user?.id;
+  if (!uid) {
     return null;
   }
 
-  return {
-    id: String(data.id),
-    profile: {
-      fullName: String(data.full_name ?? ''),
-      address: String(data.address ?? ''),
-      contactNumber: String(data.contact_number ?? ''),
-      gender: String(data.gender ?? ''),
-      age: data.age ? String(data.age) : '',
-      email: String(data.email ?? ''),
-      contactPerson: String(data.contact_person ?? ''),
-      contactPersonNumber: String(data.contact_person_number ?? ''),
-      avatarUrl: String(data.avatar_url ?? ''),
-    } satisfies PersonalInfo,
-  };
+  return fetchProfileByAuthUserId(uid);
+}
+
+const MIN_APP_PASSWORD_LEN = 6;
+
+/** Updates Auth password and clears must_change_password on the profile row. */
+export async function finalizePasswordChange(profileRecordId: string, newPassword: string) {
+  const client = requireSupabase();
+  const pwd = newPassword.trim();
+  if (pwd.length < MIN_APP_PASSWORD_LEN) {
+    throw new Error(`Password must be at least ${MIN_APP_PASSWORD_LEN} characters.`);
+  }
+
+  const { error: authErr } = await client.auth.updateUser({ password: pwd });
+  if (authErr) {
+    throw authErr;
+  }
+
+  const { error: dbErr } = await client
+    .from('profiles')
+    .update({ must_change_password: false, updated_at: new Date().toISOString() })
+    .eq('id', profileRecordId);
+
+  if (dbErr) {
+    throw dbErr;
+  }
 }
 
 export async function fetchLatestReadiness(profileId: string | null) {
@@ -297,6 +565,9 @@ type ReportInput = {
   description: string;
   photoUri: string | null;
   audioUri: string | null;
+  /** Optional GPS from device at submit (for dispatch proximity). */
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 export type SubmitIncidentResult = {
@@ -326,6 +597,10 @@ export async function submitIncidentReport(input: ReportInput): Promise<SubmitIn
       description: input.description,
       evidence_url: evidenceUrl,
       audio_url: audioUrl,
+      latitude:
+        input.latitude != null && Number.isFinite(input.latitude) ? input.latitude : null,
+      longitude:
+        input.longitude != null && Number.isFinite(input.longitude) ? input.longitude : null,
       status: 'submitted',
     })
     .select('id, staff_members(full_name)')
@@ -401,6 +676,162 @@ export async function fetchMyIncidentReports(filter: MyReportsFilter) {
       assignedStaffPhone: staffPhone,
     };
   });
+}
+
+export async function fetchStaffMemberIdByProfileId(
+  profileId: string | null,
+): Promise<string | null> {
+  if (!profileId || !isSupabaseConfigured || !supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('staff_members')
+    .select('id')
+    .eq('profile_id', profileId)
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error) {
+    console.error('fetchStaffMemberIdByProfileId', error);
+    return null;
+  }
+  if (!data?.id) {
+    return null;
+  }
+  return String(data.id);
+}
+
+export async function fetchStaffAssignments(staffId: string): Promise<StaffAssignmentReport[]> {
+  if (!isSupabaseConfigured || !supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('incident_reports')
+    .select(
+      'id,reporter_name,reporter_contact,hazard_type,location_text,description,status,created_at',
+    )
+    .eq('assigned_staff_id', staffId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('fetchStaffAssignments', error);
+    return [];
+  }
+
+  return (data ?? []).map((item) => ({
+    id: String(item.id),
+    reporterName: String(item.reporter_name ?? ''),
+    reporterContact: String(item.reporter_contact ?? ''),
+    hazardType: String(item.hazard_type ?? ''),
+    locationText: String(item.location_text ?? ''),
+    description: String(item.description ?? ''),
+    status: String(item.status ?? 'submitted'),
+    createdAt: String(item.created_at),
+  }));
+}
+
+export async function countStaffOpenAssignments(staffId: string): Promise<number> {
+  if (!isSupabaseConfigured || !supabase) {
+    return 0;
+  }
+
+  const { count, error } = await supabase
+    .from('incident_reports')
+    .select('*', { count: 'exact', head: true })
+    .eq('assigned_staff_id', staffId)
+    .in('status', ['submitted', 'in_progress']);
+
+  if (error) {
+    console.error('countStaffOpenAssignments', error);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+function isOpenAssignmentStatus(status: string) {
+  const s = status.toLowerCase();
+  return s === 'submitted' || s === 'in_progress';
+}
+
+/** Returns IDs of open (actionable) reports assigned to this staff member. */
+export async function fetchStaffOpenAssignmentIds(staffId: string): Promise<string[]> {
+  if (!isSupabaseConfigured || !supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('incident_reports')
+    .select('id,status')
+    .eq('assigned_staff_id', staffId);
+
+  if (error) {
+    console.error('fetchStaffOpenAssignmentIds', error);
+    return [];
+  }
+
+  return (data ?? [])
+    .filter((row) => isOpenAssignmentStatus(String(row.status ?? '')))
+    .map((row) => String(row.id));
+}
+
+export function subscribeToStaffAssignments(staffId: string, onEvent: () => void) {
+  if (!isSupabaseConfigured || !supabase) {
+    return () => undefined;
+  }
+
+  const client = supabase;
+  const channel = client
+    .channel(`staff-assign-bell-${staffId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'incident_reports',
+        filter: `assigned_staff_id=eq.${staffId}`,
+      },
+      () => {
+        onEvent();
+      },
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
+}
+
+export function subscribeToStaffAssignmentList(
+  staffId: string,
+  onChange: (reports: StaffAssignmentReport[]) => void,
+) {
+  if (!isSupabaseConfigured || !supabase) {
+    return () => undefined;
+  }
+
+  const client = supabase;
+  const channel = client
+    .channel(`staff-assign-list-${staffId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'incident_reports',
+        filter: `assigned_staff_id=eq.${staffId}`,
+      },
+      async () => {
+        const reports = await fetchStaffAssignments(staffId);
+        onChange(reports);
+      },
+    )
+    .subscribe();
+
+  return () => {
+    client.removeChannel(channel);
+  };
 }
 
 export function subscribeToMyIncidentReports(
@@ -500,7 +931,7 @@ export async function fetchActiveAdvisories() {
 
   const { data, error } = await supabase
     .from('advisories')
-    .select('id,title,message,severity,source,created_at,is_active')
+    .select('id,title,message,severity,source,created_at,is_active,is_verified')
     .eq('is_active', true)
     .order('created_at', { ascending: false });
 
@@ -513,14 +944,22 @@ export async function fetchActiveAdvisories() {
     return [];
   }
 
-  return data.map((item) => ({
+  const rows = data.map((item) => ({
     id: String(item.id),
     title: String(item.title),
     message: String(item.message),
     severity: (item.severity as 'low' | 'medium' | 'high') ?? 'low',
     source: String(item.source ?? 'CDRRMO Dasmarinas'),
     createdAt: String(item.created_at),
+    isVerified: (item as { is_verified?: boolean }).is_verified !== false,
   }));
+  rows.sort((a, b) => {
+    if (a.isVerified !== b.isVerified) {
+      return a.isVerified ? -1 : 1;
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+  return rows;
 }
 
 export function subscribeToActiveAdvisories(

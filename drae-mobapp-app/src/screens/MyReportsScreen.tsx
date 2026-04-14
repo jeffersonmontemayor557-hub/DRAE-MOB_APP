@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Linking,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -17,6 +19,12 @@ import {
   subscribeToMyIncidentReports,
 } from '../services/supabaseService';
 import { AppleRefreshControl } from '../components/AppleRefreshControl';
+import {
+  loadIncidentReportQueue,
+  processIncidentReportQueue,
+  type QueuedIncidentReport,
+} from '../services/incidentReportQueue';
+import { formatPhilippineMobileDisplay } from '../utils/phoneFormat';
 import { apple } from '../theme/apple';
 import { colors } from '../theme/colors';
 
@@ -34,11 +42,134 @@ function statusColor(status: string) {
   return '#344054';
 }
 
+function assistanceStepIndex(status: string) {
+  if (status === 'resolved') {
+    return 3;
+  }
+  if (status === 'in_progress') {
+    return 1;
+  }
+  return 0;
+}
+
+function AssistanceTracker({ status, referenceId }: { status: string; referenceId: string }) {
+  const steps = [
+    { key: 'submitted', label: 'Submitted' },
+    { key: 'validating', label: 'Validating' },
+    { key: 'approved', label: 'Approved' },
+  ] as const;
+  const active = assistanceStepIndex(status);
+  return (
+    <View style={trackerStyles.wrap}>
+      <Text style={trackerStyles.refLabel}>Reference</Text>
+      <Text style={trackerStyles.refId} selectable>
+        {referenceId}
+      </Text>
+      <View style={trackerStyles.row}>
+        {steps.map((step, i) => {
+          const done = i < active;
+          const current = i === active && active < 3;
+          return (
+            <View key={step.key} style={trackerStyles.stepCol}>
+              <View
+                style={[
+                  trackerStyles.dot,
+                  done && trackerStyles.dotDone,
+                  current && trackerStyles.dotCurrent,
+                ]}
+              />
+              <Text
+                style={[
+                  trackerStyles.stepText,
+                  (done || current) && trackerStyles.stepTextActive,
+                ]}
+                numberOfLines={2}
+              >
+                {step.label}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+      <Text style={trackerStyles.hint}>
+        {status === 'resolved'
+          ? 'Your report is closed. Keep this reference for any follow-up.'
+          : status === 'in_progress'
+            ? 'Responders are reviewing your report.'
+            : 'Queued for validation. You will see updates here.'}
+      </Text>
+    </View>
+  );
+}
+
+const trackerStyles = StyleSheet.create({
+  wrap: {
+    marginTop: 6,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#C5D9CE',
+    gap: 6,
+  },
+  refLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.muted,
+    letterSpacing: 0.3,
+  },
+  refId: {
+    fontSize: 12,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    color: colors.text,
+    fontWeight: '600',
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    gap: 6,
+  },
+  stepCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#d0d5dd',
+  },
+  dotDone: {
+    backgroundColor: '#1a7a4a',
+  },
+  dotCurrent: {
+    backgroundColor: '#B54708',
+    transform: [{ scale: 1.25 }],
+  },
+  stepText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.muted,
+    textAlign: 'center',
+  },
+  stepTextActive: {
+    color: colors.primaryDark,
+  },
+  hint: {
+    fontSize: 12,
+    color: colors.muted,
+    marginTop: 4,
+    lineHeight: 16,
+  },
+});
+
 export default function MyReportsScreen() {
   const { profile, profileRecordId } = useAppData();
   const [reports, setReports] = useState<MyIncidentReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [offlineQueue, setOfflineQueue] = useState<QueuedIncidentReport[]>([]);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   const filter = useMemo(
     () => ({
@@ -69,6 +200,52 @@ export default function MyReportsScreen() {
     return unsubscribe;
   }, [filter]);
 
+  const reloadOfflineQueue = useCallback(async () => {
+    const q = await loadIncidentReportQueue();
+    setOfflineQueue(q);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void reloadOfflineQueue();
+    }, [reloadOfflineQueue]),
+  );
+
+  const onSyncQueue = async () => {
+    setSyncBusy(true);
+    try {
+      const { processed, errors, failedLocalIds } = await processIncidentReportQueue();
+      await reloadOfflineQueue();
+      if (!processed && !errors.length) {
+        return;
+      }
+      if (errors.length) {
+        const uniqueErrors = [...new Set(errors)];
+        const detailLines = uniqueErrors.slice(0, 2).join('\n');
+        const more =
+          uniqueErrors.length > 2 ? `\n… and ${uniqueErrors.length - 2} more` : '';
+        const title =
+          processed > 0 ? 'Some uploads failed' : 'Uploads failed';
+        const hint = '\n\nTap Sync again when your connection is stable.';
+        Alert.alert(
+          title,
+          [
+            processed > 0 ? `Uploaded ${processed} report(s). ` : '',
+            `${failedLocalIds.length} still in the queue.`,
+            '\n',
+            detailLines,
+            more,
+            hint,
+          ].join(''),
+        );
+        return;
+      }
+      Alert.alert('Sync complete', `Uploaded ${processed} report(s).`);
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   const openUrl = async (url: string) => {
     try {
       await Linking.openURL(url);
@@ -97,8 +274,70 @@ export default function MyReportsScreen() {
           refreshControl={
             <AppleRefreshControl
               refreshing={refreshing}
-              onRefresh={() => loadReports(true)}
+              onRefresh={async () => {
+                await reloadOfflineQueue();
+                await loadReports(true);
+              }}
             />
+          }
+          ListHeaderComponent={
+            offlineQueue.length > 0 ? (
+              <View style={styles.queueSection}>
+                <Text style={styles.queueTitle}>Offline queue</Text>
+                <Text style={styles.queueSub}>
+                  Reports saved on your device sync when you are back online.
+                </Text>
+                {offlineQueue.map((item) => {
+                  const needsRetry = Boolean(item.lastError);
+                  const pillSyncing = syncBusy || item.status === 'syncing';
+                  return (
+                    <View style={styles.queueCard} key={item.localId}>
+                      <View style={styles.queueCardTop}>
+                        <Text style={styles.queueHazard}>{item.payload.hazardType || 'Report'}</Text>
+                        <View
+                          style={[
+                            styles.queueStatusPill,
+                            pillSyncing && styles.queueStatusSyncing,
+                            needsRetry && !pillSyncing && styles.queueStatusRetry,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.queueStatusText,
+                              pillSyncing && styles.queueStatusTextSyncing,
+                              needsRetry && !pillSyncing && styles.queueStatusTextRetry,
+                            ]}
+                          >
+                            {pillSyncing ? 'SYNCING' : needsRetry ? 'NEEDS RETRY' : 'PENDING'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.queueMeta}>
+                        Saved {new Date(item.createdAt).toLocaleString()}
+                        {item.lastSyncAttemptAt
+                          ? ` · Last try ${new Date(item.lastSyncAttemptAt).toLocaleString()}`
+                          : ''}
+                      </Text>
+                      {item.lastError ? (
+                        <Text style={styles.queueErrorText} numberOfLines={3}>
+                          {item.lastError}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.queuePreview} numberOfLines={2}>
+                        {item.payload.locationText || item.payload.description || '—'}
+                      </Text>
+                    </View>
+                  );
+                })}
+                <TouchableOpacity
+                  style={[styles.syncButton, syncBusy && styles.syncButtonDisabled]}
+                  onPress={onSyncQueue}
+                  disabled={syncBusy}
+                >
+                  <Text style={styles.syncButtonText}>{syncBusy ? 'SYNCING…' : 'SYNC NOW'}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null
           }
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
@@ -130,10 +369,14 @@ export default function MyReportsScreen() {
               {item.assignedStaffName ? (
                 <Text style={styles.assignedLine}>
                   Assigned responder: {item.assignedStaffName}
-                  {item.assignedStaffPhone ? ` • ${item.assignedStaffPhone}` : ''}
+                  {item.assignedStaffPhone
+                    ? ` • ${formatPhilippineMobileDisplay(item.assignedStaffPhone)}`
+                    : ''}
                 </Text>
               ) : null}
               <Text style={styles.description}>{item.description || '-'}</Text>
+
+              <AssistanceTracker status={item.status} referenceId={item.id} />
 
               <View style={styles.actions}>
                 {item.evidenceUrl ? (
@@ -272,5 +515,91 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
     fontSize: 12,
     fontWeight: '800',
+  },
+  queueSection: {
+    marginBottom: 16,
+    gap: 10,
+  },
+  queueTitle: {
+    color: colors.primaryDark,
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  queueSub: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  queueCard: {
+    backgroundColor: '#fff8e6',
+    borderRadius: apple.cardRadius,
+    padding: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#f5c16c',
+  },
+  queueCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  queueHazard: {
+    flex: 1,
+    color: colors.text,
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  queueStatusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#ffe8cc',
+  },
+  queueStatusSyncing: {
+    backgroundColor: '#dbeafe',
+  },
+  queueStatusRetry: {
+    backgroundColor: '#fee4e2',
+  },
+  queueStatusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#996600',
+  },
+  queueStatusTextSyncing: {
+    color: '#1d4ed8',
+  },
+  queueStatusTextRetry: {
+    color: '#b42318',
+  },
+  queueMeta: {
+    fontSize: 11,
+    color: colors.muted,
+  },
+  queueErrorText: {
+    fontSize: 12,
+    color: '#b42318',
+    lineHeight: 16,
+  },
+  queuePreview: {
+    fontSize: 13,
+    color: colors.text,
+  },
+  syncButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 20,
+  },
+  syncButtonDisabled: {
+    opacity: 0.6,
+  },
+  syncButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
+    letterSpacing: 0.3,
   },
 });

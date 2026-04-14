@@ -19,6 +19,16 @@ create table if not exists public.profiles (
 alter table public.profiles
   add column if not exists avatar_url text;
 
+alter table public.profiles
+  add column if not exists user_id uuid references auth.users (id) on delete set null;
+
+create unique index if not exists profiles_user_id_unique
+  on public.profiles (user_id)
+  where user_id is not null;
+
+alter table public.profiles
+  add column if not exists must_change_password boolean not null default false;
+
 create table if not exists public.incident_reports (
   id uuid primary key default gen_random_uuid(),
   profile_id uuid references public.profiles(id) on delete set null,
@@ -72,6 +82,7 @@ create table if not exists public.advisories (
   message text not null,
   severity text not null default 'low',
   source text not null default 'CDRRMO Dasmarinas',
+  is_verified boolean not null default true,
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -84,11 +95,22 @@ create table if not exists public.staff_members (
   phone text,
   hazard_types text[] not null default '{}',
   active boolean not null default true,
+  profile_id uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
 
+create unique index if not exists staff_members_profile_id_unique
+  on public.staff_members (profile_id)
+  where profile_id is not null;
+
 alter table public.incident_reports
   add column if not exists assigned_staff_id uuid references public.staff_members(id) on delete set null;
+
+alter table public.incident_reports
+  add column if not exists latitude double precision;
+
+alter table public.incident_reports
+  add column if not exists longitude double precision;
 
 drop trigger if exists trg_auto_assign_incident on public.incident_reports;
 drop function if exists public.auto_assign_incident_report();
@@ -225,6 +247,55 @@ to anon
 using (true)
 with check (true);
 
+-- Logged-in mobile clients use the authenticated role; mirror open policies for development.
+drop policy if exists "profiles_authenticated_all" on public.profiles;
+create policy "profiles_authenticated_all" on public.profiles
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "incident_reports_authenticated_all" on public.incident_reports;
+create policy "incident_reports_authenticated_all" on public.incident_reports
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "hotlines_authenticated_all" on public.hotlines;
+create policy "hotlines_authenticated_all" on public.hotlines
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "evacuation_centers_authenticated_select" on public.evacuation_centers;
+create policy "evacuation_centers_authenticated_select" on public.evacuation_centers
+for select
+to authenticated
+using (true);
+
+drop policy if exists "household_readiness_authenticated_all" on public.household_readiness;
+create policy "household_readiness_authenticated_all" on public.household_readiness
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "advisories_authenticated_all" on public.advisories;
+create policy "advisories_authenticated_all" on public.advisories
+for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "staff_members_authenticated_all" on public.staff_members;
+create policy "staff_members_authenticated_all" on public.staff_members
+for all
+to authenticated
+using (true)
+with check (true);
+
 -- PostgREST uses anon / authenticated; without GRANTs, queries return 42501 even with RLS policies.
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on table public.profiles to anon, authenticated;
@@ -242,54 +313,6 @@ delete from public.incident_reports;
 delete from public.household_readiness;
 delete from public.staff_members;
 delete from public.profiles;
-
-insert into public.staff_members (
-  id,
-  full_name,
-  role,
-  phone,
-  hazard_types,
-  active
-)
-values
-  (
-    'f1111111-1111-1111-1111-111111111111',
-    'Maria L. Santos',
-    'CDRRMO Field Responder',
-    '09170001111',
-    array['Flood', 'Landslide']::text[],
-    true
-  ),
-  (
-    'f2222222-2222-2222-2222-222222222222',
-    'Jose R. Ramos',
-    'Fire & Rescue Liaison',
-    '09170002222',
-    array['Fire', 'Earthquake']::text[],
-    true
-  ),
-  (
-    'f3333333-3333-3333-3333-333333333333',
-    'Ana K. Cruz',
-    'Operations Coordinator',
-    '09170003333',
-    array['Others', 'Tropical Cyclone']::text[],
-    true
-  ),
-  (
-    'f4444444-4444-4444-4444-444444444444',
-    'Leo P. Mendoza',
-    'General Response Pool',
-    '09170004444',
-    '{}'::text[],
-    true
-  )
-on conflict (id) do update set
-  full_name = excluded.full_name,
-  role = excluded.role,
-  phone = excluded.phone,
-  hazard_types = excluded.hazard_types,
-  active = excluded.active;
 
 insert into public.profiles (
   id,
@@ -330,6 +353,61 @@ on conflict (id) do update set
   contact_person_number = excluded.contact_person_number,
   avatar_url = excluded.avatar_url;
 
+-- staff_members.profile_id references profiles — must run after profiles seed.
+insert into public.staff_members (
+  id,
+  full_name,
+  role,
+  phone,
+  hazard_types,
+  active,
+  profile_id
+)
+values
+  (
+    'f1111111-1111-1111-1111-111111111111',
+    'Maria L. Santos',
+    'CDRRMO Field Responder',
+    '09170001111',
+    array['Flood', 'Landslide']::text[],
+    true,
+    null
+  ),
+  (
+    'f2222222-2222-2222-2222-222222222222',
+    'Jose R. Ramos',
+    'Fire & Rescue Liaison',
+    '09170002222',
+    array['Fire', 'Earthquake']::text[],
+    true,
+    null
+  ),
+  (
+    'f3333333-3333-3333-3333-333333333333',
+    'Ana K. Cruz',
+    'Operations Coordinator',
+    '09170003333',
+    array['Others', 'Tropical Cyclone']::text[],
+    true,
+    null
+  ),
+  (
+    'f4444444-4444-4444-4444-444444444444',
+    'Leo P. Mendoza',
+    'General Response Pool',
+    '09170004444',
+    '{}'::text[],
+    true,
+    '11111111-1111-1111-1111-111111111111'
+  )
+on conflict (id) do update set
+  full_name = excluded.full_name,
+  role = excluded.role,
+  phone = excluded.phone,
+  hazard_types = excluded.hazard_types,
+  active = excluded.active,
+  profile_id = excluded.profile_id;
+
 insert into public.incident_reports (
   id,
   profile_id,
@@ -337,25 +415,31 @@ insert into public.incident_reports (
   reporter_contact,
   hazard_type,
   location_text,
+  latitude,
+  longitude,
   description,
   evidence_url,
   audio_url,
   status,
-  created_at
+  created_at,
+  assigned_staff_id
 )
 values
-  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Juan Dela Cruz', '09171234567', 'Flood', 'Paliparan III main road', 'Waist-deep flood and stranded commuters.', null, null, 'submitted', now() - interval '5 hours'),
-  ('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Ana Santos', '09172345678', 'Fire', 'Salawag market', 'Small fire from electrical post.', null, null, 'in_progress', now() - interval '4 hours'),
-  ('a3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 'Mark Reyes', '09173456789', 'Landslide', 'Langkaan hillside area', 'Soil movement near homes.', null, null, 'submitted', now() - interval '3 hours'),
-  ('a4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 'Joy Mendoza', '09174567890', 'Earthquake', 'Dasmarinas Bayan', 'Falling debris from old structure.', null, null, 'resolved', now() - interval '2 hours'),
-  ('a5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 'Neil Garcia', '09175678901', 'Others', 'San Agustin II', 'Blocked drainage and rising water.', null, null, 'submitted', now() - interval '1 hour')
+  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Juan Dela Cruz', '09171234567', 'Flood', 'Paliparan III main road', 14.2997, 120.9875, 'Waist-deep flood and stranded commuters.', null, null, 'submitted', now() - interval '5 hours', 'f4444444-4444-4444-4444-444444444444'),
+  ('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Ana Santos', '09172345678', 'Fire', 'Salawag market', 14.3272, 120.9764, 'Small fire from electrical post.', null, null, 'in_progress', now() - interval '4 hours', null),
+  ('a3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 'Mark Reyes', '09173456789', 'Landslide', 'Langkaan hillside area', 14.3457, 120.9447, 'Soil movement near homes.', null, null, 'submitted', now() - interval '3 hours', null),
+  ('a4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 'Joy Mendoza', '09174567890', 'Earthquake', 'Dasmarinas Bayan', 14.3298, 120.9371, 'Falling debris from old structure.', null, null, 'resolved', now() - interval '2 hours', null),
+  ('a5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 'Neil Garcia', '09175678901', 'Others', 'San Agustin II', 14.3185, 120.9288, 'Blocked drainage and rising water.', null, null, 'submitted', now() - interval '1 hour', null)
 on conflict (id) do update set
   profile_id = excluded.profile_id,
   reporter_name = excluded.reporter_name,
   reporter_contact = excluded.reporter_contact,
   hazard_type = excluded.hazard_type,
   location_text = excluded.location_text,
+  latitude = excluded.latitude,
+  longitude = excluded.longitude,
   description = excluded.description,
+  assigned_staff_id = coalesce(excluded.assigned_staff_id, public.incident_reports.assigned_staff_id),
   evidence_url = excluded.evidence_url,
   audio_url = excluded.audio_url,
   status = excluded.status,
@@ -408,17 +492,18 @@ on conflict (id) do update set
   checked_items = excluded.checked_items,
   updated_at = excluded.updated_at;
 
-insert into public.advisories (id, title, message, severity, source, is_active, created_at)
+insert into public.advisories (id, title, message, severity, source, is_verified, is_active, created_at)
 values
-  ('c1111111-1111-1111-1111-111111111111', 'Moderate Rain Advisory', 'Expect moderate rain this afternoon. Residents near rivers and low-lying areas should monitor water levels and prepare for possible evacuation.', 'medium', 'CDRRMO Dasmarinas', true, now() - interval '2 hours'),
-  ('c2222222-2222-2222-2222-222222222222', 'Flood Preparedness Reminder', 'Prepare go-bags, charge mobile devices, and keep emergency numbers available at all times.', 'low', 'CDRRMO Dasmarinas', true, now() - interval '90 minutes'),
-  ('c3333333-3333-3333-3333-333333333333', 'Landslide Watch', 'Communities near slopes should stay alert for soil movement and cracks, especially during heavy rainfall.', 'high', 'CDRRMO Dasmarinas', true, now() - interval '45 minutes'),
-  ('c4444444-4444-4444-4444-444444444444', 'Evacuation Center Standby', 'Selected evacuation centers are on standby for immediate activation if weather conditions worsen.', 'medium', 'CDRRMO Dasmarinas', true, now() - interval '30 minutes'),
-  ('c5555555-5555-5555-5555-555555555555', 'Hotline Verification Notice', 'Use only official CDRRMO hotlines and verified LGU advisories for emergency response and updates.', 'low', 'CDRRMO Dasmarinas', true, now() - interval '10 minutes')
+  ('c1111111-1111-1111-1111-111111111111', 'Moderate Rain Advisory', 'Expect moderate rain this afternoon. Residents near rivers and low-lying areas should monitor water levels and prepare for possible evacuation.', 'medium', 'CDRRMO Dasmarinas', true, true, now() - interval '2 hours'),
+  ('c2222222-2222-2222-2222-222222222222', 'Flood Preparedness Reminder', 'Prepare go-bags, charge mobile devices, and keep emergency numbers available at all times.', 'low', 'CDRRMO Dasmarinas', true, true, now() - interval '90 minutes'),
+  ('c3333333-3333-3333-3333-333333333333', 'Landslide Watch', 'Communities near slopes should stay alert for soil movement and cracks, especially during heavy rainfall.', 'high', 'CDRRMO Dasmarinas', true, true, now() - interval '45 minutes'),
+  ('c4444444-4444-4444-4444-444444444444', 'Evacuation Center Standby', 'Selected evacuation centers are on standby for immediate activation if weather conditions worsen.', 'medium', 'CDRRMO Dasmarinas', true, true, now() - interval '30 minutes'),
+  ('c5555555-5555-5555-5555-555555555555', 'Hotline Verification Notice', 'Use only official CDRRMO hotlines and verified LGU advisories for emergency response and updates.', 'low', 'CDRRMO Dasmarinas', true, true, now() - interval '10 minutes')
 on conflict (id) do update set
   title = excluded.title,
   message = excluded.message,
   severity = excluded.severity,
   source = excluded.source,
+  is_verified = excluded.is_verified,
   is_active = excluded.is_active,
   created_at = excluded.created_at;

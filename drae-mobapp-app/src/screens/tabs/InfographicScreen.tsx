@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppleRefreshControl } from '../../components/AppleRefreshControl';
 import InfographicPngExport, { EXPORT_WIDTH, type InfoView } from '../../components/InfographicPngExport';
 import { alertPermissionBlocked, confirmPermissionStep } from '../../utils/permissionDialogs';
+import { getAdaptiveTips, type GuideContext } from '../../data/adaptiveGuidance';
 import {
   disasterGuideContent,
   DisasterHazard,
@@ -74,6 +75,12 @@ export default function InfographicScreen() {
   const hazardHeroSource = hazardHeroImage[selectedHazard];
   const introLine = stageIntro[selectedHazard]?.[stage];
   const [listRefreshing, setListRefreshing] = useState(false);
+  const [adaptiveCtx, setAdaptiveCtx] = useState<GuideContext>({
+    place: 'home',
+    time: 'day',
+    situation: 'family',
+  });
+  const adaptiveTips = useMemo(() => getAdaptiveTips(adaptiveCtx), [adaptiveCtx]);
 
   const onListRefresh = useCallback(async () => {
     setListRefreshing(true);
@@ -211,6 +218,111 @@ export default function InfographicScreen() {
               <Text style={styles.menuKicker}>CDRRMO Dasmariñas</Text>
               <Text style={styles.menuTitle}>PREPAREDNESS{'\n'}GUIDEBOOK</Text>
               <Text style={styles.menuSub}>Select a hazard to view Before, During, and After tips.</Text>
+
+              <View style={styles.adaptiveCard}>
+                <Text style={styles.adaptiveTitle}>Adaptive safety tips</Text>
+                <Text style={styles.adaptiveSub}>
+                  Short actions based on where you are, time of day, and who is with you.
+                </Text>
+                <View style={styles.adaptiveRow}>
+                  <Text style={styles.adaptiveLabel}>Place</Text>
+                  <View style={styles.adaptiveChips}>
+                    {(
+                      [
+                        { k: 'home' as const, lab: 'Home' },
+                        { k: 'school' as const, lab: 'School' },
+                        { k: 'work' as const, lab: 'Work' },
+                      ] as const
+                    ).map((o) => (
+                      <TouchableOpacity
+                        key={o.k}
+                        style={[
+                          styles.adaptiveChip,
+                          adaptiveCtx.place === o.k && styles.adaptiveChipOn,
+                        ]}
+                        onPress={() => setAdaptiveCtx((c) => ({ ...c, place: o.k }))}
+                      >
+                        <Text
+                          style={[
+                            styles.adaptiveChipText,
+                            adaptiveCtx.place === o.k && styles.adaptiveChipTextOn,
+                          ]}
+                        >
+                          {o.lab}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.adaptiveRow}>
+                  <Text style={styles.adaptiveLabel}>Time</Text>
+                  <View style={styles.adaptiveChips}>
+                    {(
+                      [
+                        { k: 'day' as const, lab: 'Day' },
+                        { k: 'night' as const, lab: 'Night' },
+                      ] as const
+                    ).map((o) => (
+                      <TouchableOpacity
+                        key={o.k}
+                        style={[
+                          styles.adaptiveChip,
+                          adaptiveCtx.time === o.k && styles.adaptiveChipOn,
+                        ]}
+                        onPress={() => setAdaptiveCtx((c) => ({ ...c, time: o.k }))}
+                      >
+                        <Text
+                          style={[
+                            styles.adaptiveChipText,
+                            adaptiveCtx.time === o.k && styles.adaptiveChipTextOn,
+                          ]}
+                        >
+                          {o.lab}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.adaptiveRow}>
+                  <Text style={styles.adaptiveLabel}>Situation</Text>
+                  <View style={styles.adaptiveChips}>
+                    {(
+                      [
+                        { k: 'alone' as const, lab: 'Alone' },
+                        { k: 'family' as const, lab: 'Family' },
+                        { k: 'elderly' as const, lab: 'With elderly' },
+                      ] as const
+                    ).map((o) => (
+                      <TouchableOpacity
+                        key={o.k}
+                        style={[
+                          styles.adaptiveChip,
+                          adaptiveCtx.situation === o.k && styles.adaptiveChipOn,
+                        ]}
+                        onPress={() => setAdaptiveCtx((c) => ({ ...c, situation: o.k }))}
+                      >
+                        <Text
+                          style={[
+                            styles.adaptiveChipText,
+                            adaptiveCtx.situation === o.k && styles.adaptiveChipTextOn,
+                          ]}
+                        >
+                          {o.lab}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.adaptiveTips}>
+                  {adaptiveTips.map((line) => (
+                    <View style={styles.adaptiveTipLine} key={line}>
+                      <Text style={styles.adaptiveBullet}>•</Text>
+                      <Text style={styles.adaptiveTipText}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
               <View style={styles.menuGrid}>
                 {hazardMenuButtons.map((item) => (
                   <TouchableOpacity
@@ -621,7 +733,87 @@ const styles = StyleSheet.create({
     fontSize: apple.infographic.english + 1,
     fontWeight: '400',
     lineHeight: 22,
+    marginBottom: 14,
+  },
+  adaptiveCard: {
+    width: '100%',
+    backgroundColor: colors.card,
+    borderRadius: apple.cardRadius,
+    padding: 14,
     marginBottom: 18,
+    gap: 10,
+    ...apple.cardShadow,
+  },
+  adaptiveTitle: {
+    fontFamily: apple.fontFamily,
+    fontSize: 17,
+    fontWeight: '700',
+    color: apple.label,
+  },
+  adaptiveSub: {
+    fontFamily: apple.fontFamily,
+    fontSize: 13,
+    color: apple.secondaryLabel,
+    lineHeight: 18,
+  },
+  adaptiveRow: {
+    gap: 6,
+  },
+  adaptiveLabel: {
+    fontFamily: apple.fontFamily,
+    fontSize: 11,
+    fontWeight: '700',
+    color: apple.secondaryLabel,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  adaptiveChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  adaptiveChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: apple.tertiaryFill,
+  },
+  adaptiveChipOn: {
+    backgroundColor: '#E8F5EC',
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  adaptiveChipText: {
+    fontFamily: apple.fontFamily,
+    fontSize: 13,
+    fontWeight: '600',
+    color: apple.secondaryLabel,
+  },
+  adaptiveChipTextOn: {
+    color: colors.primary,
+  },
+  adaptiveTips: {
+    marginTop: 4,
+    gap: 8,
+  },
+  adaptiveTipLine: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  adaptiveBullet: {
+    fontFamily: apple.fontFamily,
+    color: colors.primary,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  adaptiveTipText: {
+    flex: 1,
+    fontFamily: apple.fontFamily,
+    fontSize: 14,
+    lineHeight: 20,
+    color: apple.label,
+    fontWeight: '500',
   },
   menuGrid: {
     flexDirection: 'row',

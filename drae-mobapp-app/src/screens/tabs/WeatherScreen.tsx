@@ -1,4 +1,4 @@
-import { useFocusEffect } from '@react-navigation/native';
+﻿import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -135,36 +135,53 @@ export default function WeatherScreen() {
           <Text style={styles.emptyAdvisory}>No active advisories right now.</Text>
         ) : null}
         {advisories.map((advisory) => (
-          <View style={styles.advisoryCardOuter} key={advisory.id}>
+          <View
+            style={[
+              styles.advisoryCardOuter,
+              !advisory.isVerified && styles.advisoryCardUnverified,
+            ]}
+            key={advisory.id}
+          >
             <View style={styles.advisoryHeader}>
               <Text style={styles.advisoryTitle}>{advisory.title}</Text>
-              <View
-                style={[
-                  styles.severityBadge,
-                  advisory.severity === 'high'
-                    ? styles.severityHigh
-                    : advisory.severity === 'medium'
-                      ? styles.severityMedium
-                      : styles.severityLow,
-                ]}
-              >
-                <Text
+              <View style={styles.advisoryHeaderBadges}>
+                {advisory.isVerified ? (
+                  <View style={styles.verifiedBadge}>
+                    <Text style={styles.verifiedBadgeText}>{'\u2714 Verified'}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.unverifiedBadge}>
+                    <Text style={styles.unverifiedBadgeText}>Unverified</Text>
+                  </View>
+                )}
+                <View
                   style={[
-                    styles.severityText,
+                    styles.severityBadge,
                     advisory.severity === 'high'
-                      ? styles.severityTextHigh
+                      ? styles.severityHigh
                       : advisory.severity === 'medium'
-                        ? styles.severityTextMedium
-                        : styles.severityTextLow,
+                        ? styles.severityMedium
+                        : styles.severityLow,
                   ]}
                 >
-                  {advisory.severity.toUpperCase()}
-                </Text>
+                  <Text
+                    style={[
+                      styles.severityText,
+                      advisory.severity === 'high'
+                        ? styles.severityTextHigh
+                        : advisory.severity === 'medium'
+                          ? styles.severityTextMedium
+                          : styles.severityTextLow,
+                    ]}
+                  >
+                    {advisory.severity.toUpperCase()}
+                  </Text>
+                </View>
               </View>
             </View>
             <Text style={styles.advisoryMessage}>{advisory.message}</Text>
             <Text style={styles.advisoryMeta}>
-              {advisory.source} · {formatDate(advisory.createdAt)}
+              Source: {advisory.source} Â· Issued {formatDate(advisory.createdAt)}
             </Text>
           </View>
         ))}
@@ -186,7 +203,7 @@ export default function WeatherScreen() {
           {!isWeatherApiConfigured ? (
             <Text style={styles.item}>
               Optional: set coordinates with EXPO_PUBLIC_WEATHER_LAT and EXPO_PUBLIC_WEATHER_LON
-              (defaults to Dasmariñas area).
+              (defaults to DasmariÃ±as area).
             </Text>
           ) : null}
           {isWeatherApiConfigured && weatherLoading && !currentWeather ? (
@@ -201,11 +218,11 @@ export default function WeatherScreen() {
                 accessibilityLabel={currentWeather.description}
               />
               <View style={styles.currentTextCol}>
-                <Text style={styles.currentTemp}>{Math.round(currentWeather.tempC)}°C</Text>
+                <Text style={styles.currentTemp}>{Math.round(currentWeather.tempC)}Â°C</Text>
                 <Text style={styles.currentDesc}>{currentWeather.description}</Text>
                 <Text style={styles.currentSub}>
-                  Feels like {Math.round(currentWeather.feelsLikeC)}°C · Humidity{' '}
-                  {currentWeather.humidity}% · Wind {currentWeather.windSpeedMs.toFixed(1)} m/s
+                  Feels like {Math.round(currentWeather.feelsLikeC)}Â°C Â· Humidity{' '}
+                  {currentWeather.humidity}% Â· Wind {currentWeather.windSpeedMs.toFixed(1)} m/s
                 </Text>
                 <Text style={styles.currentLoc}>
                   {currentWeather.locationName}, {currentWeather.country}
@@ -230,7 +247,7 @@ export default function WeatherScreen() {
                     <Text style={styles.forecastTime}>{slot.timeLabel}</Text>
                     <Text style={styles.forecastDesc}>{slot.description}</Text>
                   </View>
-                  <Text style={styles.forecastTemp}>{Math.round(slot.tempC)}°</Text>
+                  <Text style={styles.forecastTemp}>{Math.round(slot.tempC)}Â°</Text>
                   {slot.popPercent > 0 ? (
                     <Text style={styles.forecastPop}>{slot.popPercent}% rain</Text>
                   ) : null}
@@ -330,11 +347,48 @@ const styles = StyleSheet.create({
     gap: 8,
     ...apple.cardShadow,
   },
+  advisoryCardUnverified: {
+    borderWidth: 1,
+    borderColor: '#f5c16c',
+    backgroundColor: '#fffaf0',
+  },
   advisoryHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 10,
+  },
+  advisoryHeaderBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    maxWidth: '48%',
+    justifyContent: 'flex-end',
+  },
+  verifiedBadge: {
+    backgroundColor: '#d1f0e3',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  verifiedBadgeText: {
+    ...font,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  unverifiedBadge: {
+    backgroundColor: '#ffe8cc',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  unverifiedBadgeText: {
+    ...font,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#996600',
   },
   advisoryTitle: {
     ...font,
@@ -507,3 +561,4 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
 });
+

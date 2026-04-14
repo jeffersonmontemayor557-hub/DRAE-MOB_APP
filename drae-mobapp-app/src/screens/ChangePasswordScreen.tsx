@@ -13,65 +13,37 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
 import { useAppData } from '../context/AppDataContext';
-import { isSupabaseConfigured, supabaseConfigError } from '../lib/supabase';
-import {
-  formatSignInErrorMessage,
-  signInWithEmailPassword,
-  signOutAuth,
-  tryLinkAuthUserToUnlinkedProfileByEmail,
-} from '../services/supabaseService';
+import { formatSignInErrorMessage } from '../services/supabaseService';
 import { colors } from '../theme/colors';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'ChangePassword'>;
 
-export default function LoginScreen({ navigation }: Props) {
-  const { refreshFromRemote } = useAppData();
-  const [email, setEmail] = useState('');
+export default function ChangePasswordScreen({ navigation }: Props) {
+  const { completePasswordChange } = useAppData();
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const onLogin = async () => {
-    if (!isSupabaseConfigured) {
-      Alert.alert('Configuration', supabaseConfigError);
+  const onSubmit = async () => {
+    const p = password.trim();
+    const c = confirm.trim();
+    if (p.length < 6) {
+      Alert.alert('New password', 'Use at least 6 characters.');
       return;
     }
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed || !password) {
-      Alert.alert('Sign in', 'Enter your email and password.');
+    if (p !== c) {
+      Alert.alert('New password', 'Passwords do not match.');
       return;
     }
 
     setBusy(true);
     try {
-      await signInWithEmailPassword(trimmed, password);
-      const link = await tryLinkAuthUserToUnlinkedProfileByEmail();
-      if (link === 'ambiguous') {
-        await signOutAuth();
-        Alert.alert(
-          'Sign in',
-          'Multiple resident records use this email. Contact CDRRMO so they can fix the records.',
-        );
-        return;
-      }
-      if (link === 'no_match') {
-        await signOutAuth();
-        Alert.alert(
-          'Sign in',
-          'No resident profile matched this account yet. Use the same email as your CDRRMO household record, or ask staff to link your login.',
-        );
-        return;
-      }
-      const { hasProfile, mustChangePassword: needNewPassword } = await refreshFromRemote();
-      if (needNewPassword) {
-        navigation.replace('ChangePassword');
-      } else if (hasProfile) {
-        navigation.replace('MainTabs');
-      } else {
-        navigation.replace('PersonalInformation');
-      }
+      await completePasswordChange(p);
+      navigation.replace('MainTabs');
     } catch (err) {
-      Alert.alert('Sign in failed', formatSignInErrorMessage(err));
+      Alert.alert('Could not update password', formatSignInErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -81,21 +53,12 @@ export default function LoginScreen({ navigation }: Props) {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <Image source={require('../../assets/cdr-logo.png')} style={styles.logo} />
-        <Text style={styles.header}>CITY DISASTER RISK REDUCTION</Text>
-        <Text style={styles.subHeader}>AND MANAGEMENT OFFICE</Text>
+        <Text style={styles.header}>SET A NEW PASSWORD</Text>
+        <Text style={styles.subHeader}>
+          Your account was created with a temporary password. Choose a new one to continue.
+        </Text>
 
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          value={email}
-          onChangeText={setEmail}
-          placeholder=""
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={!busy}
-          style={styles.input}
-        />
-        <Text style={styles.label}>Password</Text>
+        <Text style={styles.label}>New password</Text>
         <View style={styles.passwordRow}>
           <TextInput
             value={password}
@@ -122,20 +85,39 @@ export default function LoginScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          style={[styles.button, busy && styles.buttonDisabled]}
-          onPress={onLogin}
-          disabled={busy}
-        >
-          <Text style={styles.buttonText}>{busy ? 'SIGNING IN…' : 'LOG IN'}</Text>
-        </TouchableOpacity>
+        <Text style={styles.label}>Confirm password</Text>
+        <View style={styles.passwordRow}>
+          <TextInput
+            value={confirm}
+            onChangeText={setConfirm}
+            placeholder=""
+            secureTextEntry={!confirmVisible}
+            editable={!busy}
+            style={styles.passwordInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={styles.passwordReveal}
+            onPress={() => setConfirmVisible((v) => !v)}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel={confirmVisible ? 'Hide password' : 'Show password'}
+          >
+            <Ionicons
+              name={confirmVisible ? 'eye-off-outline' : 'eye-outline'}
+              size={22}
+              color={colors.primaryDark}
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
-          style={styles.linkRow}
-          onPress={() => navigation.navigate('SignUp')}
+          style={[styles.button, busy && styles.buttonDisabled]}
+          onPress={() => void onSubmit()}
           disabled={busy}
         >
-          <Text style={styles.linkText}>New resident? Create an account</Text>
+          <Text style={styles.buttonText}>{busy ? 'SAVING…' : 'CONTINUE'}</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -161,21 +143,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontWeight: '800',
     marginTop: 4,
-    letterSpacing: 1.8,
+    letterSpacing: 1.4,
   },
   subHeader: {
-    color: colors.primaryDark,
-    fontSize: 15,
+    color: '#424242',
+    fontSize: 14,
     textAlign: 'center',
-    fontWeight: '800',
-    marginBottom: 16,
-    letterSpacing: 1.8,
+    lineHeight: 20,
+    marginBottom: 8,
+    paddingHorizontal: 8,
+    maxWidth: 360,
   },
   logo: {
-    width: 126,
-    height: 126,
+    width: 96,
+    height: 96,
     resizeMode: 'contain',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   label: {
     width: '100%',
@@ -185,16 +168,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 4,
     letterSpacing: 1,
-  },
-  input: {
-    width: '100%',
-    maxWidth: 360,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
   },
   passwordRow: {
     width: '100%',
@@ -237,14 +210,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '800',
     letterSpacing: 1,
-  },
-  linkRow: {
-    marginTop: 16,
-    padding: 8,
-  },
-  linkText: {
-    color: colors.primaryDark,
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

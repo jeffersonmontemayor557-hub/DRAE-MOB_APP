@@ -6,6 +6,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,11 +18,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../../App';
 import { AppleRefreshControl } from '../../components/AppleRefreshControl';
+import { ReadinessScoreWidget } from '../../components/ReadinessScoreWidget';
 import {
   type EmergencyDialEntry,
   getEmergencyDialList,
 } from '../../data/disasterContent';
+import { useAppData } from '../../context/AppDataContext';
 import { fetchHotlines } from '../../services/supabaseService';
+import { digitsForPhilippineDialOrSms } from '../../utils/phoneFormat';
 import { apple } from '../../theme/apple';
 import { colors } from '../../theme/colors';
 
@@ -60,8 +64,20 @@ const HAZARD_ROWS: { hazard: string; emoji: string }[] = [
 
 const font = { fontFamily: apple.fontFamily };
 
+function openSafetySms(phoneRaw: string, body: string) {
+  const digits = digitsForPhilippineDialOrSms(phoneRaw);
+  if (!digits) {
+    return false;
+  }
+  const enc = encodeURIComponent(body);
+  const url =
+    Platform.OS === 'ios' ? `sms:${digits}&body=${enc}` : `sms:${digits}?body=${enc}`;
+  return url;
+}
+
 export default function EmergencyScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { profile, readiness } = useAppData();
   const [hotlineModalOpen, setHotlineModalOpen] = useState(false);
   const [dialList, setDialList] = useState<EmergencyDialEntry[]>(() =>
     getEmergencyDialList(),
@@ -121,6 +137,36 @@ export default function EmergencyScreen() {
         </View>
 
         <Text style={styles.pageTitle}>Report Emergency</Text>
+
+        <ReadinessScoreWidget readiness={readiness} profile={profile} variant="compact" />
+
+        <TouchableOpacity
+          style={styles.safeButton}
+          activeOpacity={0.88}
+          onPress={() => {
+            const phone =
+              profile.contactPersonNumber?.trim() || profile.contactNumber?.trim() || '';
+            const name = profile.fullName?.trim() || 'Resident';
+            const body = `I am safe — ${name}. Time: ${new Date().toLocaleString('en-PH')}. (Sent via DRAE / CDRRMO Dasmariñas app)`;
+            const url = openSafetySms(phone, body);
+            if (!url) {
+              Alert.alert(
+                'Add a contact',
+                'Add your mobile or emergency contact number in Profile → Edit Profile so we can open SMS.',
+              );
+              return;
+            }
+            Linking.openURL(url).catch(() => {
+              Alert.alert('SMS', 'Could not open the SMS app. Try again or call your contact.');
+            });
+            Alert.alert('Status', 'Opening SMS with your safety message. Tap Send in your messaging app.');
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="I am safe — send SMS to your emergency contact"
+        >
+          <Text style={styles.safeButtonTitle}>I am safe</Text>
+          <Text style={styles.safeButtonSub}>One tap — SMS to your saved emergency number</Text>
+        </TouchableOpacity>
 
         <View style={styles.groupCard}>
           {HAZARD_ROWS.map((row, index) => (
@@ -242,6 +288,29 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     marginBottom: 4,
+  },
+  safeButton: {
+    backgroundColor: '#145a38',
+    borderRadius: apple.cardRadius,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    gap: 4,
+    ...apple.cardShadow,
+  },
+  safeButtonTitle: {
+    ...font,
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  safeButtonSub: {
+    ...font,
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   groupCard: {
     backgroundColor: colors.card,

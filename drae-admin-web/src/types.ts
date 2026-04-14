@@ -9,6 +9,8 @@ export type Resident = {
   contact_person: string;
   contact_person_number: string;
   avatar_url?: string | null;
+  /** Set when the profile is linked to Supabase Auth (mobile login). */
+  user_id?: string | null;
 };
 
 /** Optional preparedness row joined from household_readiness (one row per profile in typical use). */
@@ -23,6 +25,32 @@ export type StaffMember = {
   full_name: string;
   phone: string | null;
   role: string | null;
+  hazard_types?: string[];
+  active?: boolean;
+  profile_id?: string | null;
+};
+
+/** Payload for creating or updating a resident profile (no id / user_id). */
+export type ResidentInput = {
+  full_name: string;
+  address: string;
+  contact_number: string;
+  gender: string;
+  age: number | null;
+  email: string;
+  contact_person: string;
+  contact_person_number: string;
+  avatar_url: string | null;
+};
+
+/** Payload for creating or updating a staff row. */
+export type StaffInput = {
+  full_name: string;
+  role: string;
+  phone: string;
+  hazard_types: string[];
+  active: boolean;
+  profile_id: string | null;
 };
 
 export type Report = {
@@ -36,6 +64,8 @@ export type Report = {
   evidence_url?: string | null;
   audio_url?: string | null;
   assigned_staff_id?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   staff_members?: {
     full_name: string;
     phone?: string | null;
@@ -49,6 +79,7 @@ export type Advisory = {
   message: string;
   severity: 'low' | 'medium' | 'high';
   source: string;
+  is_verified?: boolean;
   is_active: boolean;
   created_at: string;
 };

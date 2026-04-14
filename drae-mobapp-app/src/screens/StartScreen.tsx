@@ -23,7 +23,14 @@ export default function StartScreen({ navigation }: Props) {
           style={styles.button}
           onPress={() => navigation.navigate('Login')}
         >
-          <Text style={styles.buttonText}>START</Text>
+          <Text style={styles.buttonText}>LOG IN</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={() => navigation.navigate('SignUp')}
+        >
+          <Text style={styles.secondaryButtonText}>CREATE ACCOUNT</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -73,11 +80,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#0D2A18',
     elevation: 1,
+    marginBottom: 12,
   },
   buttonText: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '800',
     letterSpacing: 1,
+  },
+  secondaryButton: {
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: 'transparent',
+  },
+  secondaryButtonText: {
+    color: colors.primaryDark,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
 });

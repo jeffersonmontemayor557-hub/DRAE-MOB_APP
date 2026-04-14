@@ -6,12 +6,25 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+import { notifyNewStaffAssignment } from '../services/advisoryNotifications';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
+  countStaffOpenAssignments,
   fetchLatestProfile,
   fetchLatestReadiness,
+  fetchProfileByAuthUserId,
+  fetchStaffAssignments,
+  fetchStaffMemberIdByProfileId,
+  fetchStaffOpenAssignmentIds,
+  finalizePasswordChange,
+  getAuthSession,
   saveReadinessRemote,
+  signOutAuth,
+  subscribeToStaffAssignments,
+  tryLinkAuthUserToUnlinkedProfileByEmail,
 } from '../services/supabaseService';
 import { emptyPersonalInfo, PersonalInfo } from '../types/profile';
 import { emptyReadinessState, ReadinessState } from '../types/readiness';
@@ -38,11 +51,28 @@ type AppDataContextValue = {
   setReadiness: (readiness: ReadinessState) => Promise<void>;
   readinessRecordId: string | null;
   /** Re-fetch profile + readiness from Supabase and merge into local state. */
-  refreshFromRemote: () => Promise<void>;
+  refreshFromRemote: () => Promise<{ hasProfile: boolean; mustChangePassword: boolean }>;
+  /** True when admin created the login and the user must set a new password before using the app. */
+  mustChangePassword: boolean;
+  /** After successful password update + server flag clear. */
+  completePasswordChange: (newPassword: string) => Promise<void>;
+  /** Clear local caches and sign out of Supabase Auth. */
+  signOut: () => Promise<void>;
   isLoaded: boolean;
+  /** When this profile is linked to staff_members.profile_id, the staff row id. */
+  staffMemberId: string | null;
+  /** Open (submitted / in progress) reports assigned to this staff member. */
+  staffOpenAssignmentCount: number;
+  /** Re-count assignments (e.g. after pull-to-refresh); does not fire notifications. */
+  refreshStaffAssignmentStats: () => Promise<void>;
 };
 
 const AppDataContext = createContext<AppDataContextValue | undefined>(undefined);
+
+function isOpenAssignmentStatus(status: string) {
+  const s = status.toLowerCase();
+  return s === 'submitted' || s === 'in_progress';
+}
 
 export function AppDataProvider({ children }: PropsWithChildren) {
   const [profile, setProfileState] = useState<PersonalInfo>(emptyPersonalInfo);
@@ -50,28 +80,92 @@ export function AppDataProvider({ children }: PropsWithChildren) {
   const [readiness, setReadinessState] = useState<ReadinessState>(emptyReadinessState);
   const [readinessRecordId, setReadinessRecordIdState] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [staffMemberId, setStaffMemberId] = useState<string | null>(null);
+  const [staffOpenAssignmentCount, setStaffOpenAssignmentCount] = useState(0);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const staffAssignmentBootstrapDone = useRef(false);
+  const knownStaffOpenIdsRef = useRef<Set<string>>(new Set());
+
+  const clearLocalUserData = useCallback(async () => {
+    await AsyncStorage.multiRemove([
+      PROFILE_KEY,
+      PROFILE_RECORD_ID_KEY,
+      READINESS_KEY,
+      READINESS_RECORD_ID_KEY,
+    ]);
+    setProfileState(emptyPersonalInfo);
+    setProfileRecordIdState(null);
+    setReadinessState(emptyReadinessState);
+    setReadinessRecordIdState(null);
+    setStaffMemberId(null);
+    setStaffOpenAssignmentCount(0);
+    setMustChangePassword(false);
+    knownStaffOpenIdsRef.current = new Set();
+    staffAssignmentBootstrapDone.current = false;
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await clearLocalUserData();
+    await signOutAuth();
+  }, [clearLocalUserData]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      return;
+    }
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        void clearLocalUserData();
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [clearLocalUserData]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const raw = await AsyncStorage.getItem(PROFILE_KEY);
-        const storedProfileId = await AsyncStorage.getItem(PROFILE_RECORD_ID_KEY);
         const readinessRaw = await AsyncStorage.getItem(READINESS_KEY);
         const storedReadinessId = await AsyncStorage.getItem(READINESS_RECORD_ID_KEY);
+        const storedProfileId = await AsyncStorage.getItem(PROFILE_RECORD_ID_KEY);
+        const raw = await AsyncStorage.getItem(PROFILE_KEY);
 
-        let effectiveProfileId: string | null = storedProfileId;
+        const session = isSupabaseConfigured ? await getAuthSession() : null;
+        let effectiveProfileId: string | null = null;
 
-        if (raw) {
-          setProfileState(normalizeProfile(JSON.parse(raw) as PersonalInfo));
-        } else {
-          const remote = await fetchLatestProfile();
+        if (session?.user?.id) {
+          let remote = await fetchProfileByAuthUserId(session.user.id);
+          if (!remote) {
+            await tryLinkAuthUserToUnlinkedProfileByEmail();
+            remote = await fetchProfileByAuthUserId(session.user.id);
+          }
           if (remote) {
             const normalizedProfile = normalizeProfile(remote.profile);
             setProfileState(normalizedProfile);
             await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(normalizedProfile));
             await AsyncStorage.setItem(PROFILE_RECORD_ID_KEY, remote.id);
             setProfileRecordIdState(remote.id);
+            setMustChangePassword(remote.mustChangePassword);
             effectiveProfileId = remote.id;
+          } else {
+            await AsyncStorage.removeItem(PROFILE_RECORD_ID_KEY);
+            setProfileRecordIdState(null);
+            setMustChangePassword(false);
+            if (raw) {
+              setProfileState(normalizeProfile(JSON.parse(raw) as PersonalInfo));
+            } else {
+              setProfileState(emptyPersonalInfo);
+            }
+          }
+        } else {
+          setMustChangePassword(false);
+          if (raw) {
+            setProfileState(normalizeProfile(JSON.parse(raw) as PersonalInfo));
+          }
+          if (storedProfileId) {
+            setProfileRecordIdState(storedProfileId);
+            effectiveProfileId = storedProfileId;
           }
         }
 
@@ -89,9 +183,6 @@ export function AppDataProvider({ children }: PropsWithChildren) {
             setReadinessRecordIdState(remoteReadiness.id);
           }
         }
-        if (storedProfileId) {
-          setProfileRecordIdState(storedProfileId);
-        }
         if (storedReadinessId) {
           setReadinessRecordIdState(storedReadinessId);
         }
@@ -102,6 +193,111 @@ export function AppDataProvider({ children }: PropsWithChildren) {
 
     loadData();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadStaff = async () => {
+      if (!profileRecordId) {
+        setStaffMemberId(null);
+        setStaffOpenAssignmentCount(0);
+        knownStaffOpenIdsRef.current = new Set();
+        staffAssignmentBootstrapDone.current = false;
+        return;
+      }
+      const id = await fetchStaffMemberIdByProfileId(profileRecordId);
+      if (!cancelled) {
+        setStaffMemberId(id);
+        if (!id) {
+          setStaffOpenAssignmentCount(0);
+          knownStaffOpenIdsRef.current = new Set();
+          staffAssignmentBootstrapDone.current = false;
+        }
+      }
+    };
+    loadStaff();
+    return () => {
+      cancelled = true;
+    };
+  }, [profileRecordId]);
+
+  const syncStaffAssignments = useCallback(
+    async (fromRealtime: boolean) => {
+      if (!staffMemberId) {
+        setStaffOpenAssignmentCount(0);
+        knownStaffOpenIdsRef.current = new Set();
+        return;
+      }
+
+      const [openIds, count, rows] = await Promise.all([
+        fetchStaffOpenAssignmentIds(staffMemberId),
+        countStaffOpenAssignments(staffMemberId),
+        fromRealtime ? fetchStaffAssignments(staffMemberId) : Promise.resolve([]),
+      ]);
+
+      const next = new Set(openIds);
+      setStaffOpenAssignmentCount(count);
+
+      if (fromRealtime && staffAssignmentBootstrapDone.current) {
+        for (const id of next) {
+          if (!knownStaffOpenIdsRef.current.has(id)) {
+            const row = rows.find((r) => r.id === id);
+            if (row && isOpenAssignmentStatus(row.status)) {
+              await notifyNewStaffAssignment({
+                hazardType: row.hazardType,
+                locationText: row.locationText,
+                reporterName: row.reporterName || undefined,
+              });
+            }
+          }
+        }
+      }
+
+      knownStaffOpenIdsRef.current = next;
+    },
+    [staffMemberId],
+  );
+
+  useEffect(() => {
+    if (!staffMemberId) {
+      staffAssignmentBootstrapDone.current = false;
+      knownStaffOpenIdsRef.current = new Set();
+      setStaffOpenAssignmentCount(0);
+      return;
+    }
+
+    staffAssignmentBootstrapDone.current = false;
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      knownStaffOpenIdsRef.current = new Set();
+      await syncStaffAssignments(false);
+      if (!cancelled) {
+        staffAssignmentBootstrapDone.current = true;
+      }
+    };
+
+    void bootstrap();
+
+    const unsubscribe = subscribeToStaffAssignments(staffMemberId, () => {
+      void syncStaffAssignments(true);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [staffMemberId, syncStaffAssignments]);
+
+  const refreshStaffAssignmentStats = useCallback(async () => {
+    if (!staffMemberId) {
+      setStaffOpenAssignmentCount(0);
+      return;
+    }
+    const count = await countStaffOpenAssignments(staffMemberId);
+    const openIds = await fetchStaffOpenAssignmentIds(staffMemberId);
+    setStaffOpenAssignmentCount(count);
+    knownStaffOpenIdsRef.current = new Set(openIds);
+  }, [staffMemberId]);
 
   const setProfile = async (nextProfile: PersonalInfo) => {
     const normalizedProfile = normalizeProfile(nextProfile);
@@ -136,13 +332,18 @@ export function AppDataProvider({ children }: PropsWithChildren) {
 
   const refreshFromRemote = useCallback(async () => {
     try {
-      const remoteProfile = await fetchLatestProfile();
+      let remoteProfile = await fetchLatestProfile();
+      if (!remoteProfile) {
+        await tryLinkAuthUserToUnlinkedProfileByEmail();
+        remoteProfile = await fetchLatestProfile();
+      }
       if (remoteProfile) {
         const normalized = normalizeProfile(remoteProfile.profile);
         setProfileState(normalized);
         await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(normalized));
         await AsyncStorage.setItem(PROFILE_RECORD_ID_KEY, remoteProfile.id);
         setProfileRecordIdState(remoteProfile.id);
+        setMustChangePassword(remoteProfile.mustChangePassword);
 
         const remoteReadiness = await fetchLatestReadiness(remoteProfile.id);
         if (remoteReadiness) {
@@ -154,7 +355,19 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           await AsyncStorage.setItem(READINESS_RECORD_ID_KEY, remoteReadiness.id);
           setReadinessRecordIdState(remoteReadiness.id);
         }
-        return;
+
+        const sid = await fetchStaffMemberIdByProfileId(remoteProfile.id);
+        setStaffMemberId(sid);
+        if (sid) {
+          const n = await countStaffOpenAssignments(sid);
+          const oids = await fetchStaffOpenAssignmentIds(sid);
+          setStaffOpenAssignmentCount(n);
+          knownStaffOpenIdsRef.current = new Set(oids);
+        } else {
+          setStaffOpenAssignmentCount(0);
+          knownStaffOpenIdsRef.current = new Set();
+        }
+        return { hasProfile: true, mustChangePassword: remoteProfile.mustChangePassword };
       }
 
       const storedId = await AsyncStorage.getItem(PROFILE_RECORD_ID_KEY);
@@ -169,11 +382,34 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           await AsyncStorage.setItem(READINESS_RECORD_ID_KEY, remoteReadiness.id);
           setReadinessRecordIdState(remoteReadiness.id);
         }
+
+        const sid = await fetchStaffMemberIdByProfileId(storedId);
+        setStaffMemberId(sid);
+        if (sid) {
+          const n = await countStaffOpenAssignments(sid);
+          const oids = await fetchStaffOpenAssignmentIds(sid);
+          setStaffOpenAssignmentCount(n);
+          knownStaffOpenIdsRef.current = new Set(oids);
+        }
       }
+      return { hasProfile: false, mustChangePassword: false };
     } catch {
       // Offline or misconfiguration: keep cached data.
+      return { hasProfile: false, mustChangePassword: false };
     }
   }, []);
+
+  const completePasswordChange = useCallback(
+    async (newPassword: string) => {
+      const id = profileRecordId;
+      if (!id) {
+        throw new Error('No profile loaded.');
+      }
+      await finalizePasswordChange(id, newPassword);
+      setMustChangePassword(false);
+    },
+    [profileRecordId],
+  );
 
   const value = useMemo(
     () => ({
@@ -185,7 +421,13 @@ export function AppDataProvider({ children }: PropsWithChildren) {
       setReadiness,
       readinessRecordId,
       refreshFromRemote,
+      mustChangePassword,
+      completePasswordChange,
+      signOut,
       isLoaded,
+      staffMemberId,
+      staffOpenAssignmentCount,
+      refreshStaffAssignmentStats,
     }),
     [
       profile,
@@ -193,7 +435,13 @@ export function AppDataProvider({ children }: PropsWithChildren) {
       readiness,
       readinessRecordId,
       refreshFromRemote,
+      mustChangePassword,
+      completePasswordChange,
+      signOut,
       isLoaded,
+      staffMemberId,
+      staffOpenAssignmentCount,
+      refreshStaffAssignmentStats,
     ],
   );
 

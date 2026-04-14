@@ -1,5 +1,13 @@
 -- DRAE Mobile App Dummy Data
--- Paste this in Supabase SQL Editor after running schema.sql.
+-- Paste this in Supabase SQL Editor after running schema.sql (tables must exist).
+
+-- Older databases may lack staff_members.profile_id; add it before seeding (safe to run every time).
+alter table public.staff_members
+  add column if not exists profile_id uuid references public.profiles(id) on delete set null;
+
+create unique index if not exists staff_members_profile_id_unique
+  on public.staff_members (profile_id)
+  where profile_id is not null;
 
 -- Keep only demo rows for clear testing.
 delete from public.incident_reports;
@@ -45,7 +53,8 @@ insert into public.staff_members (
   role,
   phone,
   hazard_types,
-  active
+  active,
+  profile_id
 )
 values
   (
@@ -54,7 +63,8 @@ values
     'CDRRMO Field Responder',
     '09170001111',
     array['Flood', 'Landslide']::text[],
-    true
+    true,
+    null
   ),
   (
     'f2222222-2222-2222-2222-222222222222',
@@ -62,7 +72,8 @@ values
     'Fire & Rescue Liaison',
     '09170002222',
     array['Fire', 'Earthquake']::text[],
-    true
+    true,
+    null
   ),
   (
     'f3333333-3333-3333-3333-333333333333',
@@ -70,7 +81,8 @@ values
     'Operations Coordinator',
     '09170003333',
     array['Others', 'Tropical Cyclone']::text[],
-    true
+    true,
+    null
   ),
   (
     'f4444444-4444-4444-4444-444444444444',
@@ -78,14 +90,16 @@ values
     'General Response Pool',
     '09170004444',
     '{}'::text[],
-    true
+    true,
+    '11111111-1111-1111-1111-111111111111'
   )
 on conflict (id) do update set
   full_name = excluded.full_name,
   role = excluded.role,
   phone = excluded.phone,
   hazard_types = excluded.hazard_types,
-  active = excluded.active;
+  active = excluded.active,
+  profile_id = excluded.profile_id;
 
 insert into public.incident_reports (
   id,
@@ -94,18 +108,21 @@ insert into public.incident_reports (
   reporter_contact,
   hazard_type,
   location_text,
+  latitude,
+  longitude,
   description,
   evidence_url,
   audio_url,
   status,
-  created_at
+  created_at,
+  assigned_staff_id
 )
 values
-  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Juan Dela Cruz', '09171234567', 'Flood', 'Paliparan III main road', 'Waist-deep flood and stranded commuters.', null, null, 'submitted', now() - interval '5 hours'),
-  ('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Ana Santos', '09172345678', 'Fire', 'Salawag market', 'Small fire from electrical post.', null, null, 'in_progress', now() - interval '4 hours'),
-  ('a3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 'Mark Reyes', '09173456789', 'Landslide', 'Langkaan hillside area', 'Soil movement near homes.', null, null, 'submitted', now() - interval '3 hours'),
-  ('a4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 'Joy Mendoza', '09174567890', 'Earthquake', 'Dasmarinas Bayan', 'Falling debris from old structure.', null, null, 'resolved', now() - interval '2 hours'),
-  ('a5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 'Neil Garcia', '09175678901', 'Others', 'San Agustin II', 'Blocked drainage and rising water.', null, null, 'submitted', now() - interval '1 hour');
+  ('a1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Juan Dela Cruz', '09171234567', 'Flood', 'Paliparan III main road', 14.2997, 120.9875, 'Waist-deep flood and stranded commuters.', null, null, 'submitted', now() - interval '5 hours', 'f4444444-4444-4444-4444-444444444444'),
+  ('a2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 'Ana Santos', '09172345678', 'Fire', 'Salawag market', 14.3272, 120.9764, 'Small fire from electrical post.', null, null, 'in_progress', now() - interval '4 hours', null),
+  ('a3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 'Mark Reyes', '09173456789', 'Landslide', 'Langkaan hillside area', 14.3457, 120.9447, 'Soil movement near homes.', null, null, 'submitted', now() - interval '3 hours', null),
+  ('a4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 'Joy Mendoza', '09174567890', 'Earthquake', 'Dasmarinas Bayan', 14.3298, 120.9371, 'Falling debris from old structure.', null, null, 'resolved', now() - interval '2 hours', null),
+  ('a5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 'Neil Garcia', '09175678901', 'Others', 'San Agustin II', 14.3185, 120.9288, 'Blocked drainage and rising water.', null, null, 'submitted', now() - interval '1 hour', null);
 
 insert into public.hotlines (label, phone, priority)
 values

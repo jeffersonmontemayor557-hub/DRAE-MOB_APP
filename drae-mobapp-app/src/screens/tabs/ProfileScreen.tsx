@@ -1,13 +1,15 @@
 import * as ImagePicker from 'expo-image-picker';
+import { CommonActions, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import { Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../../App';
 import { AppleRefreshControl } from '../../components/AppleRefreshControl';
+import { ReadinessScoreWidget } from '../../components/ReadinessScoreWidget';
 import { useAppData } from '../../context/AppDataContext';
 import { saveProfileRemote } from '../../services/supabaseService';
+import { formatPhilippineMobileDisplay } from '../../utils/phoneFormat';
 import { alertPermissionBlocked, confirmPermissionStep } from '../../utils/permissionDialogs';
 import { apple } from '../../theme/apple';
 import { colors } from '../../theme/colors';
@@ -22,6 +24,10 @@ export default function ProfileScreen() {
     profileRecordId,
     setProfileRecordId,
     refreshFromRemote,
+    signOut,
+    staffMemberId,
+    staffOpenAssignmentCount,
+    refreshStaffAssignmentStats,
   } = useAppData();
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -87,12 +93,17 @@ export default function ProfileScreen() {
     setRefreshing(true);
     try {
       await refreshFromRemote();
+      await refreshStaffAssignmentStats();
     } finally {
       setRefreshing(false);
     }
-  }, [refreshFromRemote]);
+  }, [refreshFromRemote, refreshStaffAssignmentStats]);
 
-  const emergencyLine = `${safe(profile.contactPerson)} · ${safe(profile.contactPersonNumber)}`;
+  const emergencyLine = `${safe(profile.contactPerson)} · ${
+    profile.contactPersonNumber?.trim()
+      ? formatPhilippineMobileDisplay(profile.contactPersonNumber)
+      : '—'
+  }`;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -117,20 +128,17 @@ export default function ProfileScreen() {
           </TouchableOpacity>
           <Text style={styles.heroName}>{safe(profile.fullName)}</Text>
           <Text style={styles.heroLocation}>{safe(profile.address)}</Text>
-          <TouchableOpacity
-            style={styles.scorePill}
-            onPress={() => navigation.navigate('ReadinessChecklist')}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.scorePillText}>{readiness.score}% Household Ready</Text>
-          </TouchableOpacity>
         </View>
+
+        <ReadinessScoreWidget readiness={readiness} profile={profile} variant="full" />
 
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Contact number</Text>
             <Text style={styles.infoValue} numberOfLines={2}>
-              {safe(profile.contactNumber)}
+              {profile.contactNumber?.trim()
+                ? formatPhilippineMobileDisplay(profile.contactNumber)
+                : '—'}
             </Text>
           </View>
           <View style={styles.infoDivider} />
@@ -162,6 +170,40 @@ export default function ProfileScreen() {
           activeOpacity={0.85}
         >
           <Text style={styles.btnOutlineGrayText}>My Reports</Text>
+        </TouchableOpacity>
+        {staffMemberId ? (
+          <TouchableOpacity
+            style={styles.btnStaffAssignments}
+            onPress={() => navigation.navigate('StaffAssignments')}
+            activeOpacity={0.85}
+          >
+            <View style={styles.btnStaffRow}>
+              <Text style={styles.btnStaffAssignmentsText}>My assignments</Text>
+              {staffOpenAssignmentCount > 0 ? (
+                <View style={styles.staffBadge}>
+                  <Text style={styles.staffBadgeText}>
+                    {staffOpenAssignmentCount > 99 ? '99+' : staffOpenAssignmentCount}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.btnStaffHint}>CDRRMO responder queue</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={styles.btnSignOut}
+          onPress={async () => {
+            await signOut();
+            navigation.dispatch(
+              CommonActions.reset({
+                index: 0,
+                routes: [{ name: 'SessionGate' }],
+              }),
+            );
+          }}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.btnSignOutText}>Log out</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -226,18 +268,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     marginBottom: 12,
-  },
-  scorePill: {
-    backgroundColor: '#d1f0e3',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 100,
-  },
-  scorePillText: {
-    ...font,
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
   },
   infoCard: {
     backgroundColor: colors.card,
@@ -317,6 +347,60 @@ const styles = StyleSheet.create({
     ...font,
     color: '#3a3a3c',
     fontSize: 17,
+    fontWeight: '600',
+  },
+  btnStaffAssignments: {
+    backgroundColor: '#eaf3de',
+    borderRadius: apple.cardRadius,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#c0d9b8',
+    ...apple.cardShadow,
+  },
+  btnStaffRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  btnStaffAssignmentsText: {
+    ...font,
+    color: colors.primary,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  staffBadge: {
+    backgroundColor: '#fee2e2',
+    minWidth: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  staffBadgeText: {
+    ...font,
+    color: '#b91c1c',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  btnStaffHint: {
+    ...font,
+    color: colors.secondaryText,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  btnSignOut: {
+    marginTop: 24,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  btnSignOutText: {
+    ...font,
+    color: '#8e8e93',
+    fontSize: 16,
     fontWeight: '600',
   },
 });
