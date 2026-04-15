@@ -19,7 +19,7 @@ import { colors } from '../theme/colors';
 type Props = NativeStackScreenProps<RootStackParamList, 'ChangePassword'>;
 
 export default function ChangePasswordScreen({ navigation }: Props) {
-  const { completePasswordChange } = useAppData();
+  const { completePasswordChange, refreshFromRemote } = useAppData();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -41,7 +41,8 @@ export default function ChangePasswordScreen({ navigation }: Props) {
     setBusy(true);
     try {
       await completePasswordChange(p);
-      navigation.replace('MainTabs');
+      const { mustCompleteProfile } = await refreshFromRemote();
+      navigation.replace(mustCompleteProfile ? 'PersonalInformation' : 'MainTabs');
     } catch (err) {
       Alert.alert('Could not update password', formatSignInErrorMessage(err));
     } finally {

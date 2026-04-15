@@ -62,9 +62,12 @@ export default function LoginScreen({ navigation }: Props) {
         );
         return;
       }
-      const { hasProfile, mustChangePassword: needNewPassword } = await refreshFromRemote();
+      const { hasProfile, mustChangePassword: needNewPassword, mustCompleteProfile } =
+        await refreshFromRemote();
       if (needNewPassword) {
         navigation.replace('ChangePassword');
+      } else if (hasProfile && mustCompleteProfile) {
+        navigation.replace('PersonalInformation');
       } else if (hasProfile) {
         navigation.replace('MainTabs');
       } else {

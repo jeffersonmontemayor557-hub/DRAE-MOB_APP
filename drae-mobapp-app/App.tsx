@@ -147,7 +147,7 @@ const tabIconName = (name: keyof MainTabParamList) => {
 function SessionGateScreen({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, 'SessionGate'>) {
-  const { isLoaded, profileRecordId, mustChangePassword } = useAppData();
+  const { isLoaded, profileRecordId, mustChangePassword, mustCompleteProfile } = useAppData();
 
   useEffect(() => {
     if (!isLoaded) {
@@ -163,6 +163,8 @@ function SessionGateScreen({
       if (session) {
         if (profileRecordId && mustChangePassword) {
           navigation.replace('ChangePassword');
+        } else if (profileRecordId && mustCompleteProfile) {
+          navigation.replace('PersonalInformation');
         } else if (profileRecordId) {
           navigation.replace('MainTabs');
         } else {
@@ -177,7 +179,7 @@ function SessionGateScreen({
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, profileRecordId, mustChangePassword, navigation]);
+  }, [isLoaded, profileRecordId, mustChangePassword, mustCompleteProfile, navigation]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>

@@ -9,6 +9,7 @@ import { AppleRefreshControl } from '../../components/AppleRefreshControl';
 import { ReadinessScoreWidget } from '../../components/ReadinessScoreWidget';
 import { useAppData } from '../../context/AppDataContext';
 import { saveProfileRemote } from '../../services/supabaseService';
+import { persistPickedMediaUri } from '../../utils/persistMediaUri';
 import { formatPhilippineMobileDisplay } from '../../utils/phoneFormat';
 import { alertPermissionBlocked, confirmPermissionStep } from '../../utils/permissionDialogs';
 import { apple } from '../../theme/apple';
@@ -85,7 +86,13 @@ export default function ProfileScreen() {
     });
 
     if (!result.canceled) {
-      await syncAvatar(result.assets[0].uri);
+      try {
+        const stableUri = await persistPickedMediaUri(result.assets[0].uri, 'avatar');
+        await syncAvatar(stableUri);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not save the photo file.';
+        Alert.alert('Photo Error', message);
+      }
     }
   };
 

@@ -20,10 +20,9 @@ Then restart Expo dev server after editing `.env`.
 - Open Supabase SQL Editor
 - Run `supabase/schema.sql`
 
-## 4) Create storage bucket for report photos
-- Go to Storage
-- Create bucket: `incident-evidence`
-- For quick prototype testing, set bucket to public.
+## 4) Storage bucket for report photos / audio
+- `supabase/schema.sql` (and migration `20260415140000_storage_incident_evidence.sql`) creates bucket **`incident-evidence`**, marks it **public**, and adds **RLS policies** so the app can upload.
+- If you created the bucket manually before, run the migration or the storage section of `schema.sql` once so **insert** policies exist (otherwise uploads fail and reports go offline).
 
 ## 5) Run the app
 ```

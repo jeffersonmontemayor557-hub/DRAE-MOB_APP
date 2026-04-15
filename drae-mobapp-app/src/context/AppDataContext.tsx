@@ -51,9 +51,15 @@ type AppDataContextValue = {
   setReadiness: (readiness: ReadinessState) => Promise<void>;
   readinessRecordId: string | null;
   /** Re-fetch profile + readiness from Supabase and merge into local state. */
-  refreshFromRemote: () => Promise<{ hasProfile: boolean; mustChangePassword: boolean }>;
+  refreshFromRemote: () => Promise<{
+    hasProfile: boolean;
+    mustChangePassword: boolean;
+    mustCompleteProfile: boolean;
+  }>;
   /** True when admin created the login and the user must set a new password before using the app. */
   mustChangePassword: boolean;
+  /** True until the user saves Personal Information (admin stub profile). */
+  mustCompleteProfile: boolean;
   /** After successful password update + server flag clear. */
   completePasswordChange: (newPassword: string) => Promise<void>;
   /** Clear local caches and sign out of Supabase Auth. */
@@ -83,6 +89,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
   const [staffMemberId, setStaffMemberId] = useState<string | null>(null);
   const [staffOpenAssignmentCount, setStaffOpenAssignmentCount] = useState(0);
   const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [mustCompleteProfile, setMustCompleteProfile] = useState(false);
   const staffAssignmentBootstrapDone = useRef(false);
   const knownStaffOpenIdsRef = useRef<Set<string>>(new Set());
 
@@ -100,6 +107,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
     setStaffMemberId(null);
     setStaffOpenAssignmentCount(0);
     setMustChangePassword(false);
+    setMustCompleteProfile(false);
     knownStaffOpenIdsRef.current = new Set();
     staffAssignmentBootstrapDone.current = false;
   }, []);
@@ -147,11 +155,13 @@ export function AppDataProvider({ children }: PropsWithChildren) {
             await AsyncStorage.setItem(PROFILE_RECORD_ID_KEY, remote.id);
             setProfileRecordIdState(remote.id);
             setMustChangePassword(remote.mustChangePassword);
+            setMustCompleteProfile(remote.mustCompleteProfile);
             effectiveProfileId = remote.id;
           } else {
             await AsyncStorage.removeItem(PROFILE_RECORD_ID_KEY);
             setProfileRecordIdState(null);
             setMustChangePassword(false);
+            setMustCompleteProfile(false);
             if (raw) {
               setProfileState(normalizeProfile(JSON.parse(raw) as PersonalInfo));
             } else {
@@ -160,6 +170,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           }
         } else {
           setMustChangePassword(false);
+          setMustCompleteProfile(false);
           if (raw) {
             setProfileState(normalizeProfile(JSON.parse(raw) as PersonalInfo));
           }
@@ -344,6 +355,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
         await AsyncStorage.setItem(PROFILE_RECORD_ID_KEY, remoteProfile.id);
         setProfileRecordIdState(remoteProfile.id);
         setMustChangePassword(remoteProfile.mustChangePassword);
+        setMustCompleteProfile(remoteProfile.mustCompleteProfile);
 
         const remoteReadiness = await fetchLatestReadiness(remoteProfile.id);
         if (remoteReadiness) {
@@ -367,7 +379,11 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           setStaffOpenAssignmentCount(0);
           knownStaffOpenIdsRef.current = new Set();
         }
-        return { hasProfile: true, mustChangePassword: remoteProfile.mustChangePassword };
+        return {
+          hasProfile: true,
+          mustChangePassword: remoteProfile.mustChangePassword,
+          mustCompleteProfile: remoteProfile.mustCompleteProfile,
+        };
       }
 
       const storedId = await AsyncStorage.getItem(PROFILE_RECORD_ID_KEY);
@@ -392,10 +408,10 @@ export function AppDataProvider({ children }: PropsWithChildren) {
           knownStaffOpenIdsRef.current = new Set(oids);
         }
       }
-      return { hasProfile: false, mustChangePassword: false };
+      return { hasProfile: false, mustChangePassword: false, mustCompleteProfile: false };
     } catch {
       // Offline or misconfiguration: keep cached data.
-      return { hasProfile: false, mustChangePassword: false };
+      return { hasProfile: false, mustChangePassword: false, mustCompleteProfile: false };
     }
   }, []);
 
@@ -422,6 +438,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
       readinessRecordId,
       refreshFromRemote,
       mustChangePassword,
+      mustCompleteProfile,
       completePasswordChange,
       signOut,
       isLoaded,
@@ -436,6 +453,7 @@ export function AppDataProvider({ children }: PropsWithChildren) {
       readinessRecordId,
       refreshFromRemote,
       mustChangePassword,
+      mustCompleteProfile,
       completePasswordChange,
       signOut,
       isLoaded,

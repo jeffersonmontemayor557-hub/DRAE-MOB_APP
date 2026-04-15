@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
+import { goBackOrMainTabs } from '../navigation/goBackOrMainTabs';
 import { AppleRefreshControl } from '../components/AppleRefreshControl';
 import {
   computeReadinessScore,
@@ -72,7 +73,7 @@ export default function ReadinessChecklistScreen({ navigation }: Props) {
           );
         })}
 
-        <TouchableOpacity style={styles.doneButton} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={styles.doneButton} onPress={() => goBackOrMainTabs(navigation)}>
           <Text style={styles.doneButtonText}>DONE</Text>
         </TouchableOpacity>
       </ScrollView>

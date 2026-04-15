@@ -1,16 +1,22 @@
+import type { Session } from '@supabase/supabase-js';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
+import { AdminAccessDenied } from './components/AdminAccessDenied';
+import { AdminLoginScreen } from './components/AdminLoginScreen';
+import { AdminMustChangePasswordPanel } from './components/AdminMustChangePasswordPanel';
 import { AppModal } from './components/AppModal';
 import { ResidentEditor } from './components/ResidentEditor';
 import { StaffEditor } from './components/StaffEditor';
 import { formatPhilippineMobileDisplay } from './lib/phoneFormat';
-import { isSupabaseConfigured } from './lib/supabase';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
 import {
   clearResidentAuthLink,
   createAdvisory,
-  createMobileAppLogin,
   createResident,
+  createResidentWithEmailOnlyLogin,
   createStaffMember,
+  createStaffWithMobileLogin,
+  createStaffWithEmailOnlyLogin,
   deleteHotline,
   deleteResident,
   deleteStaffMember,
@@ -26,6 +32,13 @@ import {
   updateReportStatus,
   updateResident,
   updateStaffMember,
+  fetchMyAdminAccess,
+  superadminAddAdminByEmail,
+  superadminListAppAdmins,
+  superadminRemoveAdmin,
+  type AppAdminDashboardRole,
+  type AppAdminRow,
+  type MyAdminAccess,
 } from './services/dashboardService';
 import type {
   Advisory,
@@ -38,9 +51,29 @@ import type {
   StaffMember,
 } from './types';
 
-type Page = 'dashboard' | 'members' | 'staff' | 'reports' | 'advisories' | 'hotlines' | 'app_logins';
+type Page =
+  | 'dashboard'
+  | 'members'
+  | 'staff'
+  | 'reports'
+  | 'advisories'
+  | 'hotlines'
+  | 'users'
+  | 'admin_users';
 
 type HazardSeverityLevel = 'high' | 'medium' | 'low';
+
+function initialsFromEmail(email: string | undefined): string {
+  if (!email?.trim()) {
+    return 'AD';
+  }
+  const local = email.split('@')[0] ?? email;
+  const parts = local.split(/[.\s_-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase().slice(0, 2);
+  }
+  return local.slice(0, 2).toUpperCase();
+}
 
 function hazardSeverityFromType(hazard: string): HazardSeverityLevel {
   const x = (hazard || '').toLowerCase();
@@ -211,8 +244,10 @@ function pageTitle(page: Page) {
       return 'Alerts';
     case 'hotlines':
       return 'Hotlines';
-    case 'app_logins':
-      return 'Mobile app logins';
+    case 'users':
+      return 'Users';
+    case 'admin_users':
+      return 'Administrators';
     default:
       return '';
   }
@@ -378,7 +413,21 @@ function IconMegaphoneStat() {
   );
 }
 
-function App() {
+function IconShieldAdmin({ active }: { active?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3l7 4v5c0 5-3.5 9-7 10-3.5-1-7-5-7-10V7l7-4z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+        opacity={active ? 1 : 0.65}
+      />
+    </svg>
+  );
+}
+
+function DashboardApp({ session }: { session: Session }) {
   const [page, setPage] = useState<Page>('dashboard');
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [members, setMembers] = useState<ResidentWithReadiness[]>([]);
@@ -399,22 +448,24 @@ function App() {
     priority: '1',
   });
   const [loading, setLoading] = useState(true);
-  const [appLoginForm, setAppLoginForm] = useState({
-    profileId: '',
-    email: '',
-  });
-  const [appLoginMessage, setAppLoginMessage] = useState<{
-    kind: 'ok' | 'err';
-    text: string;
-  } | null>(null);
-  const [appLoginBusy, setAppLoginBusy] = useState(false);
-  const [appLoginLastTempPassword, setAppLoginLastTempPassword] = useState<string | null>(null);
+  const [usersInviteEmail, setUsersInviteEmail] = useState('');
+  const [usersInviteBusy, setUsersInviteBusy] = useState(false);
+  const [usersInviteMessage, setUsersInviteMessage] = useState<string | null>(null);
+  const [usersInviteLastTempPassword, setUsersInviteLastTempPassword] = useState<string | null>(null);
   const [residentModal, setResidentModal] = useState<
     null | { mode: 'create' } | { mode: 'edit'; row: ResidentWithReadiness }
   >(null);
   const [staffModal, setStaffModal] = useState<null | { mode: 'create' } | { mode: 'edit'; row: StaffMember }>(
     null,
   );
+  const [memberInviteEmail, setMemberInviteEmail] = useState('');
+  const [memberInviteBusy, setMemberInviteBusy] = useState(false);
+  const [memberInviteMessage, setMemberInviteMessage] = useState<string | null>(null);
+  const [memberInviteLastTempPassword, setMemberInviteLastTempPassword] = useState<string | null>(null);
+  const [staffInviteEmail, setStaffInviteEmail] = useState('');
+  const [staffInviteBusy, setStaffInviteBusy] = useState(false);
+  const [staffInviteMessage, setStaffInviteMessage] = useState<string | null>(null);
+  const [staffInviteLastTempPassword, setStaffInviteLastTempPassword] = useState<string | null>(null);
   const [residentFormBusy, setResidentFormBusy] = useState(false);
   const [staffFormBusy, setStaffFormBusy] = useState(false);
   /** Accordion: one expanded resident row at a time for less visual clutter. */
@@ -424,8 +475,70 @@ function App() {
   const [memberFilterApp, setMemberFilterApp] = useState<'all' | 'yes' | 'no'>('all');
   const [reportFilterOpenOnly, setReportFilterOpenOnly] = useState(false);
   const [reportFilterHighSeverity, setReportFilterHighSeverity] = useState(false);
+  const [myAdminAccess, setMyAdminAccess] = useState<MyAdminAccess | null>(null);
+  const myAdminRole = myAdminAccess?.role ?? null;
+  const [adminList, setAdminList] = useState<AppAdminRow[]>([]);
+  const [adminInviteEmail, setAdminInviteEmail] = useState('');
+  const [adminInviteRole, setAdminInviteRole] = useState<AppAdminDashboardRole>('admin');
+  const [adminUsersBusy, setAdminUsersBusy] = useState(false);
+  const [adminUsersMessage, setAdminUsersMessage] = useState<string | null>(null);
+  /** Shown only when a brand-new Auth user was created for this admin (one-time). */
+  const [adminInviteLastTempPassword, setAdminInviteLastTempPassword] = useState<string | null>(null);
+  const [adminRoleResolved, setAdminRoleResolved] = useState(false);
 
-  const loadAll = async () => {
+  const refreshMyAdminAccess = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      return;
+    }
+    setMyAdminAccess(await fetchMyAdminAccess());
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAdminRoleResolved(false);
+    void (async () => {
+      const r = await fetchMyAdminAccess();
+      if (!cancelled) {
+        setMyAdminAccess(r);
+        setAdminRoleResolved(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.user.id]);
+
+  const refreshAdminList = useCallback(async () => {
+    if (!isSupabaseConfigured || myAdminRole !== 'superadmin') {
+      return;
+    }
+    try {
+      setAdminList(await superadminListAppAdmins());
+    } catch (err) {
+      console.error(err);
+      setAdminList([]);
+    }
+  }, [myAdminRole]);
+
+  useEffect(() => {
+    if (myAdminRole === 'superadmin') {
+      void refreshAdminList();
+    }
+  }, [myAdminRole, refreshAdminList]);
+
+  useEffect(() => {
+    if (page === 'admin_users' && myAdminRole === 'superadmin') {
+      void refreshAdminList();
+    }
+  }, [page, myAdminRole, refreshAdminList]);
+
+  useEffect(() => {
+    if (page === 'admin_users' && myAdminRole != null && myAdminRole !== 'superadmin') {
+      setPage('dashboard');
+    }
+  }, [page, myAdminRole]);
+
+  const loadAll = useCallback(async () => {
     setLoading(true);
     try {
       const [statsData, memberRows, reportRows, advisoryRows, hotlineRows, staffRows] =
@@ -446,11 +559,25 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadAll();
-  }, []);
+    if (!adminRoleResolved || myAdminRole === null) {
+      return;
+    }
+    void loadAll();
+  }, [adminRoleResolved, myAdminRole, loadAll]);
+
+  const superadminSlotFilled = useMemo(
+    () => adminList.some((r) => r.role === 'superadmin'),
+    [adminList],
+  );
+
+  useEffect(() => {
+    if (superadminSlotFilled && adminInviteRole === 'superadmin') {
+      setAdminInviteRole('admin');
+    }
+  }, [superadminSlotFilled, adminInviteRole]);
 
   const infoRows = useMemo(() => members, [members]);
   const memberFilteredRows = useMemo(() => {
@@ -733,7 +860,20 @@ function App() {
     }
     setStaffFormBusy(true);
     try {
-      if (staffModal?.mode === 'create') {
+      if (staffModal?.mode === 'create' && input.login_email?.trim()) {
+        const r = await createStaffWithMobileLogin({
+          ...input,
+          profile_id: null,
+          login_email: input.login_email.trim().toLowerCase(),
+        });
+        if (!r.ok) {
+          window.alert(r.message);
+          return;
+        }
+        window.alert(
+          `Staff member and mobile login were created.\n\nTemporary password (give this to the user securely):\n${r.temporaryPassword}`,
+        );
+      } else if (staffModal?.mode === 'create') {
         await createStaffMember(input);
       } else if (staffModal?.mode === 'edit') {
         await updateStaffMember(staffModal.row.id, input);
@@ -763,35 +903,27 @@ function App() {
     }
   };
 
-  const handleCreateMobileLogin = async () => {
-    if (!appLoginForm.profileId || !appLoginForm.email.trim()) {
-      setAppLoginMessage({ kind: 'err', text: 'Choose a resident and enter a login email.' });
-      return;
-    }
-    setAppLoginBusy(true);
-    setAppLoginMessage(null);
-    setAppLoginLastTempPassword(null);
-    try {
-      const result = await createMobileAppLogin({
-        profileId: appLoginForm.profileId,
-        email: appLoginForm.email,
-      });
-      if (result.ok) {
-        setAppLoginLastTempPassword(result.temporaryPassword);
-        setAppLoginMessage({
-          kind: 'ok',
-          text:
-            'Mobile login created. Copy the temporary password below and give it to the resident once. They must choose a new password when they first open the app.',
-        });
-        const memberRows = await getResidentsWithReadiness();
-        setMembers(memberRows);
-      } else {
-        setAppLoginMessage({ kind: 'err', text: result.message });
-      }
-    } finally {
-      setAppLoginBusy(false);
-    }
-  };
+  if (!adminRoleResolved) {
+    return (
+      <div className="admin-auth-shell">
+        <p className="muted-text">Checking dashboard access…</p>
+      </div>
+    );
+  }
+
+  if (myAdminRole === null) {
+    return <AdminAccessDenied email={session.user.email} />;
+  }
+
+  if (myAdminAccess?.mustChangePassword) {
+    return (
+      <AdminMustChangePasswordPanel
+        onSuccess={() => {
+          void refreshMyAdminAccess();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="dashboard-page">
@@ -868,24 +1000,55 @@ function App() {
             </span>
             <span className="nav-item-label">Hotlines</span>
           </button>
+          {myAdminRole === 'superadmin' ? (
+            <button
+              type="button"
+              className={`nav-item ${page === 'admin_users' ? 'active' : ''}`}
+              onClick={() => setPage('admin_users')}
+            >
+              <span className="nav-item-icon">
+                <IconShieldAdmin active={page === 'admin_users'} />
+              </span>
+              <span className="nav-item-label">Administrators</span>
+            </button>
+          ) : null}
           <button
             type="button"
-            className={`nav-item ${page === 'app_logins' ? 'active' : ''}`}
-            onClick={() => setPage('app_logins')}
+            className={`nav-item ${page === 'users' ? 'active' : ''}`}
+            onClick={() => setPage('users')}
           >
             <span className="nav-item-icon">
-              <IconMobile active={page === 'app_logins'} />
+              <IconMobile active={page === 'users'} />
             </span>
-            <span className="nav-item-label">App logins</span>
+            <span className="nav-item-label">Users</span>
           </button>
         </nav>
 
         <div className="sidebar-profile">
-          <div className="sidebar-profile-avatar">AD</div>
-          <div className="sidebar-profile-text">
-            <span className="sidebar-profile-name">Admin</span>
-            <span className="sidebar-profile-role">CDRRMO Staff</span>
+          <div className="sidebar-profile-row">
+            <div className="sidebar-profile-avatar">{initialsFromEmail(session.user.email)}</div>
+            <div className="sidebar-profile-text">
+              <span className="sidebar-profile-name" title={session.user.email ?? ''}>
+                {session.user.email ?? 'Signed in'}
+              </span>
+              <span
+                className={
+                  myAdminRole === 'superadmin'
+                    ? 'sidebar-profile-role sidebar-profile-role--super'
+                    : 'sidebar-profile-role'
+                }
+              >
+                {myAdminRole === 'superadmin' ? 'Superadmin' : 'Admin'}
+              </span>
+            </div>
           </div>
+          <button
+            type="button"
+            className="sidebar-sign-out"
+            onClick={() => void supabase?.auth.signOut()}
+          >
+            Sign out
+          </button>
         </div>
       </aside>
 
@@ -896,9 +1059,18 @@ function App() {
               <h1 className="dash-topbar-title">{pageTitle(page)}</h1>
               {page === 'dashboard' ? <p className="dash-topbar-date">{todayStr}</p> : null}
             </div>
-            <button type="button" className="btn-refresh" onClick={() => loadAll()}>
-              ↻ Refresh data
-            </button>
+            <div className="dash-topbar-actions">
+              <span
+                className={
+                  myAdminRole === 'superadmin' ? 'dash-role-pill dash-role-pill--super' : 'dash-role-pill'
+                }
+              >
+                {myAdminRole === 'superadmin' ? 'Superadmin' : 'Admin'}
+              </span>
+              <button type="button" className="btn-refresh" onClick={() => loadAll()}>
+                ↻ Refresh data
+              </button>
+            </div>
           </header>
 
           {page === 'dashboard' ? (
@@ -1042,8 +1214,10 @@ function App() {
                 <div>
                   <h2 style={{ margin: 0 }}>Residence information ({infoRows.length} members)</h2>
                   <p className="members-page-hint muted-text">
-                    Summary columns below. Use <strong>More</strong> for address, email, emergency contact, and
-                    readiness timestamps — or <strong>Edit</strong> for the full form.
+                    Add a household the same way as <strong>Administrators</strong>: enter an email, submit, copy the
+                    one-time password. The resident signs in on the mobile app and sets a new password. Use{' '}
+                    <strong>Edit</strong> to complete profile details. If email confirmation is on in Supabase, turn
+                    it off for testing or confirm the user first.
                   </p>
                   {infoRows.length > 0 ? (
                     <p className="members-filter-summary muted-text">
@@ -1058,16 +1232,120 @@ function App() {
                     </p>
                   ) : null}
                 </div>
-                {isSupabaseConfigured ? (
+              </div>
+              {!isSupabaseConfigured ? (
+                <p className="config-banner">Configure Supabase in <code>.env</code> first.</p>
+              ) : (
+                <div className="advisory-form" style={{ marginTop: 16, maxWidth: 520 }}>
+                  <label className="muted-text" htmlFor="member-invite-email">
+                    Email (mobile app login)
+                  </label>
+                  <input
+                    id="member-invite-email"
+                    className="form-input"
+                    type="email"
+                    autoComplete="off"
+                    placeholder="name@example.com"
+                    value={memberInviteEmail}
+                    onChange={(e) => setMemberInviteEmail(e.target.value)}
+                  />
                   <button
                     type="button"
                     className="action-button"
-                    onClick={() => setResidentModal({ mode: 'create' })}
+                    style={{ marginTop: 12 }}
+                    disabled={memberInviteBusy || !memberInviteEmail.trim()}
+                    onClick={() => {
+                      setMemberInviteMessage(null);
+                      setMemberInviteLastTempPassword(null);
+                      setMemberInviteBusy(true);
+                      void (async () => {
+                        try {
+                          const r = await createResidentWithEmailOnlyLogin(memberInviteEmail);
+                          if (r.ok) {
+                            setMemberInviteEmail('');
+                            setMemberInviteLastTempPassword(r.temporaryPassword);
+                            setMemberInviteMessage(
+                              'Resident saved. Copy the password below now—it is not stored. They sign in on the mobile app, then choose a new password.',
+                            );
+                            await loadAll();
+                          } else {
+                            setMemberInviteMessage(r.message);
+                          }
+                        } finally {
+                          setMemberInviteBusy(false);
+                        }
+                      })();
+                    }}
                   >
-                    + Add resident
+                    {memberInviteBusy ? 'Saving…' : 'Add resident & mobile login'}
                   </button>
-                ) : null}
-              </div>
+                  {memberInviteLastTempPassword ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: '12px 14px',
+                        borderRadius: 8,
+                        background: 'rgba(15, 23, 42, 0.06)',
+                        border: '1px solid rgba(15, 23, 42, 0.12)',
+                      }}
+                    >
+                      <div className="muted-text" style={{ fontSize: 12, marginBottom: 8 }}>
+                        Temporary password (copy now — not stored)
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 10,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <code
+                          style={{
+                            flex: '1 1 200px',
+                            fontSize: 14,
+                            wordBreak: 'break-all',
+                            padding: '8px 10px',
+                            background: '#fff',
+                            borderRadius: 6,
+                            border: '1px solid rgba(15, 23, 42, 0.1)',
+                          }}
+                        >
+                          {memberInviteLastTempPassword}
+                        </code>
+                        <button
+                          type="button"
+                          className="action-button secondary"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(memberInviteLastTempPassword);
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {memberInviteMessage ? (
+                    <p
+                      className="muted-text"
+                      style={{ marginTop: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                    >
+                      {memberInviteMessage}
+                    </p>
+                  ) : null}
+                  <p className="muted-text" style={{ marginTop: 14, marginBottom: 0, fontSize: 13 }}>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      style={{ marginTop: 4 }}
+                      onClick={() => setResidentModal({ mode: 'create' })}
+                    >
+                      Household record only (no app login)
+                    </button>{' '}
+                    — optional; the <strong>Users</strong> page uses the same email + temporary password flow.
+                  </p>
+                </div>
+              )}
               {!loading && infoRows.length > 0 ? (
                 <div className="members-filter-bar">
                   <input
@@ -1270,16 +1548,125 @@ function App() {
             <section className="panel">
               <div className="panel-toolbar">
                 <h2 style={{ margin: 0 }}>Response staff ({staffMembers.length})</h2>
-                {isSupabaseConfigured ? (
-                  <button type="button" className="action-button" onClick={() => setStaffModal({ mode: 'create' })}>
-                    + Add staff
-                  </button>
-                ) : null}
               </div>
-              <p className="muted-text" style={{ maxWidth: 720 }}>
-                Staff appear in report assignment when <strong>Active</strong> is on. Link a resident profile
-                when this person also uses the mobile app as that household (e.g. responder who is a resident).
+              <p className="muted-text" style={{ maxWidth: 720, lineHeight: 1.55 }}>
+                Same flow as <strong>Administrators</strong>: enter an email to create a staff roster entry, profile,
+                and mobile login with a one-time password (email must not already exist on a profile). Staff are
+                included in report assignment when <strong>Active</strong> is on. Use the button below for roster-only
+                or linking a resident profile.
               </p>
+              {!isSupabaseConfigured ? (
+                <p className="config-banner">Configure Supabase in <code>.env</code> first.</p>
+              ) : (
+                <div className="advisory-form" style={{ marginTop: 16, maxWidth: 520 }}>
+                  <label className="muted-text" htmlFor="staff-invite-email">
+                    Email (mobile app login)
+                  </label>
+                  <input
+                    id="staff-invite-email"
+                    className="form-input"
+                    type="email"
+                    autoComplete="off"
+                    placeholder="name@example.com"
+                    value={staffInviteEmail}
+                    onChange={(e) => setStaffInviteEmail(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="action-button"
+                    style={{ marginTop: 12 }}
+                    disabled={staffInviteBusy || !staffInviteEmail.trim()}
+                    onClick={() => {
+                      setStaffInviteMessage(null);
+                      setStaffInviteLastTempPassword(null);
+                      setStaffInviteBusy(true);
+                      void (async () => {
+                        try {
+                          const r = await createStaffWithEmailOnlyLogin(staffInviteEmail);
+                          if (r.ok) {
+                            setStaffInviteEmail('');
+                            setStaffInviteLastTempPassword(r.temporaryPassword);
+                            setStaffInviteMessage(
+                              'Staff saved. Copy the password below now—it is not stored. They sign in on the mobile app, then choose a new password.',
+                            );
+                            await loadAll();
+                          } else {
+                            setStaffInviteMessage(r.message);
+                          }
+                        } finally {
+                          setStaffInviteBusy(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {staffInviteBusy ? 'Saving…' : 'Add staff & mobile login'}
+                  </button>
+                  {staffInviteLastTempPassword ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: '12px 14px',
+                        borderRadius: 8,
+                        background: 'rgba(15, 23, 42, 0.06)',
+                        border: '1px solid rgba(15, 23, 42, 0.12)',
+                      }}
+                    >
+                      <div className="muted-text" style={{ fontSize: 12, marginBottom: 8 }}>
+                        Temporary password (copy now — not stored)
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 10,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <code
+                          style={{
+                            flex: '1 1 200px',
+                            fontSize: 14,
+                            wordBreak: 'break-all',
+                            padding: '8px 10px',
+                            background: '#fff',
+                            borderRadius: 6,
+                            border: '1px solid rgba(15, 23, 42, 0.1)',
+                          }}
+                        >
+                          {staffInviteLastTempPassword}
+                        </code>
+                        <button
+                          type="button"
+                          className="action-button secondary"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(staffInviteLastTempPassword);
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {staffInviteMessage ? (
+                    <p
+                      className="muted-text"
+                      style={{ marginTop: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                    >
+                      {staffInviteMessage}
+                    </p>
+                  ) : null}
+                  <p className="muted-text" style={{ marginTop: 14, marginBottom: 0, fontSize: 13 }}>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      style={{ marginTop: 4 }}
+                      onClick={() => setStaffModal({ mode: 'create' })}
+                    >
+                      Roster form (link resident, hazards, etc.)
+                    </button>
+                  </p>
+                </div>
+              )}
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -1622,62 +2009,290 @@ function App() {
                 ))}
               </div>
             </section>
-          ) : page === 'app_logins' ? (
+          ) : page === 'admin_users' ? (
             <section className="panel">
-              <h2>Create mobile app login</h2>
-              <p className="muted-text" style={{ maxWidth: 680, lineHeight: 1.55 }}>
-                This is the normal way to add residents after you publish: you stay in this admin site only.
-                Supabase stays in the background (database + Auth). We register the login, link it to the
-                resident row (<code>profiles.user_id</code>), and generate a one-time temporary password. The
-                resident signs in with that password once, then the app asks them to set a new password. Disable
-                “Confirm email” under Supabase → Authentication → Providers → Email while testing. You need the{' '}
-                <code>profiles.user_id</code> and <code>profiles.must_change_password</code> columns (latest
-                migrations). The field below is <strong>filled from the resident’s profile email</strong>; edit
-                it if needed (e.g. seed data sometimes uses <code>@email.com</code>, which Supabase Auth may
-                reject—use Gmail or your domain instead).
+              <h2>Administrators</h2>
+              <p className="muted-text" style={{ maxWidth: 720, lineHeight: 1.55 }}>
+                Superadmins add or remove dashboard access. A <strong>temporary password appears only
+                on this page</strong> when the email had <strong>no</strong> Supabase Auth user yet—the
+                password is created once and is <strong>not stored</strong>. If the email already existed
+                under Authentication → Users, you only see “Saved.” and they use (or reset) their
+                existing password. Regular <strong>admins</strong> cannot open this screen. At least one
+                superadmin must remain. Roles in the table are read-only—pick the role when adding someone
+                (only one superadmin is intended).
+              </p>
+              {!isSupabaseConfigured ? (
+                <p className="config-banner">Configure Supabase in <code>.env</code> first.</p>
+              ) : myAdminRole !== 'superadmin' ? (
+                <p className="config-banner">Only superadmins can manage this list.</p>
+              ) : (
+                <>
+                  <div className="advisory-form" style={{ marginTop: 16, maxWidth: 520 }}>
+                    <label className="muted-text" htmlFor="admin-invite-email">
+                      Email (dashboard login)
+                    </label>
+                    <input
+                      id="admin-invite-email"
+                      className="form-input"
+                      type="email"
+                      autoComplete="off"
+                      placeholder="name@example.com"
+                      value={adminInviteEmail}
+                      onChange={(e) => setAdminInviteEmail(e.target.value)}
+                    />
+                    <label className="muted-text" htmlFor="admin-invite-role" style={{ marginTop: 10 }}>
+                      Role
+                    </label>
+                    <select
+                      id="admin-invite-role"
+                      className="status-select"
+                      style={{ width: '100%', marginTop: 6 }}
+                      value={adminInviteRole}
+                      onChange={(e) =>
+                        setAdminInviteRole(e.target.value as AppAdminDashboardRole)
+                      }
+                    >
+                      <option value="admin">Admin (full dashboard, cannot add admins)</option>
+                      {!superadminSlotFilled ? (
+                        <option value="superadmin">Superadmin (can add or remove admins)</option>
+                      ) : null}
+                    </select>
+                    <button
+                      type="button"
+                      className="action-button"
+                      style={{ marginTop: 12 }}
+                      disabled={adminUsersBusy || !adminInviteEmail.trim()}
+                      onClick={() => {
+                        setAdminUsersMessage(null);
+                        setAdminInviteLastTempPassword(null);
+                        setAdminUsersBusy(true);
+                        void (async () => {
+                          try {
+                            const addResult = await superadminAddAdminByEmail(
+                              adminInviteEmail,
+                              adminInviteRole,
+                            );
+                            setAdminInviteEmail('');
+                            if (addResult.temporaryPassword) {
+                              setAdminInviteLastTempPassword(addResult.temporaryPassword);
+                              setAdminUsersMessage(
+                                'Administrator saved. Copy the password in the box below now—it is not saved anywhere. They sign in here, then choose a new password before the dashboard unlocks.',
+                              );
+                            } else {
+                              setAdminInviteLastTempPassword(null);
+                              setAdminUsersMessage(
+                                'Saved. No temporary password was shown because this email already had a Supabase Auth account. They sign in with that password, or you reset it under Supabase → Authentication → Users.',
+                              );
+                            }
+                            await refreshAdminList();
+                            await refreshMyAdminAccess();
+                          } catch (err) {
+                            setAdminInviteLastTempPassword(null);
+                            setAdminUsersMessage(
+                              err instanceof Error
+                                ? err.message
+                                : typeof err === 'object' &&
+                                    err &&
+                                    'message' in err &&
+                                    typeof (err as { message: unknown }).message === 'string'
+                                  ? (err as { message: string }).message
+                                  : 'Could not add administrator.',
+                            );
+                          } finally {
+                            setAdminUsersBusy(false);
+                          }
+                        })();
+                      }}
+                    >
+                      {adminUsersBusy ? 'Saving…' : 'Add or update administrator'}
+                    </button>
+                    {adminInviteLastTempPassword ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: '12px 14px',
+                          borderRadius: 8,
+                          background: 'rgba(15, 23, 42, 0.06)',
+                          border: '1px solid rgba(15, 23, 42, 0.12)',
+                        }}
+                      >
+                        <div className="muted-text" style={{ fontSize: 12, marginBottom: 8 }}>
+                          Temporary password (copy now — not stored)
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 10,
+                            alignItems: 'center',
+                          }}
+                        >
+                          <code
+                            style={{
+                              flex: '1 1 200px',
+                              fontSize: 14,
+                              wordBreak: 'break-all',
+                              padding: '8px 10px',
+                              background: '#fff',
+                              borderRadius: 6,
+                              border: '1px solid rgba(15, 23, 42, 0.1)',
+                            }}
+                          >
+                            {adminInviteLastTempPassword}
+                          </code>
+                          <button
+                            type="button"
+                            className="action-button secondary"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(adminInviteLastTempPassword);
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {adminUsersMessage ? (
+                      <p
+                        className="muted-text"
+                        style={{ marginTop: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                      >
+                        {adminUsersMessage}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="table-wrap" style={{ marginTop: 24 }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Email</th>
+                          <th>Role</th>
+                          <th>Added</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminList.length === 0 ? (
+                          <tr>
+                            <td colSpan={4}>No rows (or still loading).</td>
+                          </tr>
+                        ) : (
+                          adminList.map((row) => (
+                            <tr key={row.userId}>
+                              <td>{row.email}</td>
+                              <td>
+                                <span
+                                  className={
+                                    row.role === 'superadmin'
+                                      ? 'dash-role-pill dash-role-pill--super'
+                                      : 'dash-role-pill'
+                                  }
+                                  style={{ display: 'inline-block' }}
+                                >
+                                  {row.role === 'superadmin' ? 'Superadmin' : 'Admin'}
+                                </span>
+                              </td>
+                              <td>{row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="action-button danger"
+                                  disabled={adminUsersBusy}
+                                  onClick={() => {
+                                    if (
+                                      !window.confirm(
+                                        `Remove dashboard access for ${row.email}?`,
+                                      )
+                                    ) {
+                                      return;
+                                    }
+                                    setAdminUsersBusy(true);
+                                    void (async () => {
+                                      try {
+                                        await superadminRemoveAdmin(row.userId);
+                                        await refreshAdminList();
+                                        await refreshMyAdminAccess();
+                                      } catch (err) {
+                                        alert(
+                                          err instanceof Error
+                                            ? err.message
+                                            : 'Could not remove.',
+                                        );
+                                      } finally {
+                                        setAdminUsersBusy(false);
+                                      }
+                                    })();
+                                  }}
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </section>
+          ) : page === 'users' ? (
+            <section className="panel">
+              <h2>Users</h2>
+              <p className="muted-text" style={{ maxWidth: 720, lineHeight: 1.55 }}>
+                Same flow as <strong>Administrators</strong> and <strong>Members</strong>: one email creates a
+                household profile, Supabase Auth account, and a one-time temporary password (not stored after this
+                page). They sign in on the <strong>mobile app</strong> and choose a new password. For testing,
+                disable “Confirm email” under Supabase → Authentication → Providers → Email so users are not stuck
+                on “Waiting for verification”.
               </p>
               {!isSupabaseConfigured ? (
                 <p className="config-banner">Configure Supabase in <code>.env</code> first.</p>
               ) : (
-                <div className="advisory-form" style={{ marginTop: 16, maxWidth: 480 }}>
-                  <label className="muted-text" htmlFor="app-login-resident">
-                    Resident profile
+                <div className="advisory-form" style={{ marginTop: 16, maxWidth: 520 }}>
+                  <label className="muted-text" htmlFor="users-invite-email">
+                    Email (mobile app login)
                   </label>
-                  <select
-                    id="app-login-resident"
-                    className="status-select"
-                    style={{ width: '100%', marginTop: 6 }}
-                    value={appLoginForm.profileId}
-                    onChange={(event) => {
-                      const id = event.target.value;
-                      const row = id ? members.find((m) => m.id === id) : null;
-                      const profileEmail = row?.email?.trim() ?? '';
-                      setAppLoginForm((prev) => ({
-                        ...prev,
-                        profileId: id,
-                        email: profileEmail,
-                      }));
-                    }}
-                  >
-                    <option value="">Select a resident…</option>
-                    {members.map((m) => (
-                      <option key={m.id} value={m.id} disabled={Boolean(m.user_id)}>
-                        {m.full_name || m.id}
-                        {m.user_id ? ' (already has login)' : ''}
-                      </option>
-                    ))}
-                  </select>
                   <input
+                    id="users-invite-email"
                     className="form-input"
                     type="email"
-                    placeholder="From profile — edit if Supabase rejects this address"
                     autoComplete="off"
-                    value={appLoginForm.email}
-                    onChange={(event) =>
-                      setAppLoginForm((prev) => ({ ...prev, email: event.target.value }))
-                    }
+                    placeholder="name@example.com"
+                    value={usersInviteEmail}
+                    onChange={(e) => setUsersInviteEmail(e.target.value)}
                   />
-                  {appLoginLastTempPassword ? (
+                  <button
+                    type="button"
+                    className="action-button"
+                    style={{ marginTop: 12 }}
+                    disabled={usersInviteBusy || !usersInviteEmail.trim()}
+                    onClick={() => {
+                      setUsersInviteMessage(null);
+                      setUsersInviteLastTempPassword(null);
+                      setUsersInviteBusy(true);
+                      void (async () => {
+                        try {
+                          const r = await createResidentWithEmailOnlyLogin(usersInviteEmail);
+                          if (r.ok) {
+                            setUsersInviteEmail('');
+                            setUsersInviteLastTempPassword(r.temporaryPassword);
+                            setUsersInviteMessage(
+                              'User saved. Copy the password below now—it is not stored. They sign in on the mobile app, then choose a new password.',
+                            );
+                            await loadAll();
+                          } else {
+                            setUsersInviteMessage(r.message);
+                          }
+                        } finally {
+                          setUsersInviteBusy(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {usersInviteBusy ? 'Saving…' : 'Add user & mobile login'}
+                  </button>
+                  {usersInviteLastTempPassword ? (
                     <div
                       style={{
                         marginTop: 12,
@@ -1688,7 +2303,7 @@ function App() {
                       }}
                     >
                       <div className="muted-text" style={{ fontSize: 12, marginBottom: 8 }}>
-                        Temporary password (copy now — it is not stored)
+                        Temporary password (copy now — not stored)
                       </div>
                       <div
                         style={{
@@ -1709,13 +2324,13 @@ function App() {
                             border: '1px solid rgba(15, 23, 42, 0.1)',
                           }}
                         >
-                          {appLoginLastTempPassword}
+                          {usersInviteLastTempPassword}
                         </code>
                         <button
                           type="button"
                           className="action-button secondary"
                           onClick={() => {
-                            void navigator.clipboard.writeText(appLoginLastTempPassword);
+                            void navigator.clipboard.writeText(usersInviteLastTempPassword);
                           }}
                         >
                           Copy
@@ -1723,25 +2338,12 @@ function App() {
                       </div>
                     </div>
                   ) : null}
-                  <button
-                    type="button"
-                    className="action-button"
-                    disabled={appLoginBusy}
-                    onClick={() => void handleCreateMobileLogin()}
-                  >
-                    {appLoginBusy ? 'Creating…' : 'Create login & link profile'}
-                  </button>
-                  {appLoginMessage ? (
+                  {usersInviteMessage ? (
                     <p
-                      className={appLoginMessage.kind === 'ok' ? 'pill-yes' : 'config-banner'}
-                      style={{
-                        margin: '12px 0 0',
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        whiteSpace: 'pre-wrap',
-                      }}
+                      className="muted-text"
+                      style={{ marginTop: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                     >
-                      {appLoginMessage.text}
+                      {usersInviteMessage}
                     </p>
                   ) : null}
                 </div>
@@ -1896,4 +2498,45 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setSession(null);
+      return;
+    }
+    void supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => setSession(newSession));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="admin-auth-shell">
+        <div className="admin-login-card">
+          <p className="config-banner" style={{ margin: 0 }}>
+            Configure <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in{' '}
+            <code>.env</code>, then restart the dev server.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (session === undefined) {
+    return (
+      <div className="admin-auth-shell">
+        <p className="muted-text">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AdminLoginScreen />;
+  }
+
+  return <DashboardApp session={session} />;
+}

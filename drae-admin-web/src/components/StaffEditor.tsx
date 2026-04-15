@@ -8,6 +8,7 @@ const empty: StaffInput = {
   hazard_types: [],
   active: true,
   profile_id: null,
+  login_email: '',
 };
 
 function staffToInput(s: StaffMember): StaffInput {
@@ -18,6 +19,7 @@ function staffToInput(s: StaffMember): StaffInput {
     hazard_types: Array.isArray(s.hazard_types) ? [...s.hazard_types] : [],
     active: s.active !== false,
     profile_id: s.profile_id ?? null,
+    login_email: '',
   };
 }
 
@@ -116,6 +118,24 @@ export function StaffEditor({
         />
         <span>Active (eligible for report assignment)</span>
       </label>
+      {mode === 'create' ? (
+        <label className="crud-field">
+          <span>Mobile login email (optional)</span>
+          <input
+            className="form-input"
+            type="email"
+            autoComplete="off"
+            value={form.login_email ?? ''}
+            onChange={(ev) => setForm((f) => ({ ...f, login_email: ev.target.value }))}
+            placeholder="e.g. staff@agency.gov — creates profile + app login"
+          />
+          <span className="muted-text" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+            If set, a resident-style profile row and mobile account are created; the user must
+            complete personal information and change the temporary password in the app. Leave blank
+            for roster-only staff with no app login.
+          </span>
+        </label>
+      ) : null}
       <label className="crud-field">
         <span>Linked resident profile (optional)</span>
         <select
@@ -129,6 +149,7 @@ export function StaffEditor({
               profile_id: v === '' ? null : v,
             }));
           }}
+          disabled={mode === 'create' && Boolean(form.login_email?.trim())}
         >
           <option value="">None</option>
           {residents.map((r) => (
@@ -141,6 +162,9 @@ export function StaffEditor({
       <p className="muted-text" style={{ margin: 0, fontSize: 12 }}>
         Only one staff row can link to a given resident. If a profile is already linked elsewhere,
         Supabase will return an error—edit the other staff member first.
+        {mode === 'create' && form.login_email?.trim()
+          ? ' Linked profile is disabled when creating a mobile login (a new profile is created for that email).'
+          : ''}
       </p>
       <div className="crud-actions">
         <button type="button" className="action-button secondary" onClick={onCancel} disabled={saving}>

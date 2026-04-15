@@ -405,6 +405,7 @@ export async function createResident(input: ResidentInput): Promise<string> {
       contact_person: input.contact_person.trim() || null,
       contact_person_number: input.contact_person_number.trim() || null,
       avatar_url: input.avatar_url?.trim() || null,
+      must_complete_profile: false,
       updated_at: now,
     })
     .select('id')
@@ -433,6 +434,7 @@ export async function updateResident(id: string, input: ResidentInput): Promise<
       contact_person: input.contact_person.trim() || null,
       contact_person_number: input.contact_person_number.trim() || null,
       avatar_url: input.avatar_url?.trim() || null,
+      must_complete_profile: false,
       updated_at: now,
     })
     .eq('id', id);
@@ -699,6 +701,281 @@ function generateTemporaryPassword(length = 20): string {
   return out;
 }
 
+function normalizeLoginEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/** Readable placeholder name from an email local part (before @). */
+function displayNameFromEmail(email: string): string {
+  const local = (email.split('@')[0] ?? 'user').trim();
+  const spaced = local.replace(/[._-]+/g, ' ').trim();
+  if (!spaced) {
+    return 'New user';
+  }
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const MIN_DASHBOARD_PASSWORD_LEN = 6;
+
+type ProfilesEmailRow = { id: string; user_id: string | null };
+
+/** Resolves profiles with exact email (caller passes normalized). */
+async function loadProfilesByEmail(
+  normalizedEmail: string,
+): Promise<{ rows: ProfilesEmailRow[]; error: string | null }> {
+  if (!supabase) {
+    return { rows: [], error: 'Supabase is not configured.' };
+  }
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id,user_id')
+    .eq('email', normalizedEmail);
+  if (error) {
+    return { rows: [], error: error.message };
+  }
+  return {
+    rows: (data ?? []).map((r) => ({
+      id: String((r as { id: unknown }).id),
+      user_id: (r as { user_id: string | null }).user_id ?? null,
+    })),
+    error: null,
+  };
+}
+
+export type QuickProvisionResult =
+  | { ok: true; temporaryPassword: string; profileId: string }
+  | { ok: false; message: string };
+
+/**
+ * Creates a resident profile (minimal), Auth login, and links profile.user_id.
+ * Reuses an existing unlinked profile row with the same email when present.
+ */
+export async function createResidentWithEmailOnlyLogin(email: string): Promise<QuickProvisionResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+  const normalized = normalizeLoginEmail(email);
+  if (!normalized || !normalized.includes('@')) {
+    return { ok: false, message: 'Enter a valid email.' };
+  }
+
+  const { rows, error: loadErr } = await loadProfilesByEmail(normalized);
+  if (loadErr) {
+    return { ok: false, message: loadErr };
+  }
+  const withLogin = rows.filter((r) => r.user_id != null);
+  if (withLogin.length > 0) {
+    return {
+      ok: false,
+      message: 'A resident profile with this email already has a mobile login.',
+    };
+  }
+  const unlinked = rows.filter((r) => r.user_id == null);
+  if (unlinked.length > 1) {
+    return {
+      ok: false,
+      message: 'Multiple resident rows share this email without a login. Merge or fix them first.',
+    };
+  }
+
+  const ephemeral = createEphemeralAuthClient();
+  if (!ephemeral) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+
+  const now = new Date().toISOString();
+  let profileId: string;
+
+  if (unlinked.length === 1) {
+    profileId = unlinked[0]!.id;
+  } else {
+    const label = `${displayNameFromEmail(normalized)} (household)`;
+    const { data: inserted, error: insErr } = await supabase
+      .from('profiles')
+      .insert({
+        full_name: label,
+        email: normalized,
+        must_complete_profile: true,
+        updated_at: now,
+      })
+      .select('id')
+      .single();
+    if (insErr) {
+      return { ok: false, message: insErr.message };
+    }
+    profileId = String(inserted!.id);
+  }
+
+  const temporaryPassword = generateTemporaryPassword();
+  const { data: signData, error: signErr } = await ephemeral.auth.signUp({
+    email: normalized,
+    password: temporaryPassword,
+  });
+
+  if (signErr) {
+    if (unlinked.length === 0) {
+      await supabase.from('profiles').delete().eq('id', profileId);
+    }
+    return { ok: false, message: formatSignUpErrorForAdmin(signErr.message) };
+  }
+
+  const userId = signData.user?.id;
+  if (!userId) {
+    return {
+      ok: false,
+      message:
+        'No user id returned. In Supabase: Authentication → Providers → Email — disable “Confirm email” for local testing, then try again.',
+    };
+  }
+
+  const linkPayload =
+    unlinked.length === 1
+      ? { user_id: userId, must_change_password: true, updated_at: now }
+      : {
+          user_id: userId,
+          must_change_password: true,
+          must_complete_profile: true,
+          updated_at: now,
+        };
+
+  const { error: upErr } = await supabase.from('profiles').update(linkPayload).eq('id', profileId);
+
+  if (upErr) {
+    return {
+      ok: false,
+      message: `Auth user was created but linking failed: ${upErr.message}. Link manually in SQL or remove the Auth user in the Dashboard.`,
+    };
+  }
+
+  return { ok: true, temporaryPassword, profileId };
+}
+
+/**
+ * Creates a backing profile + Auth login + staff row (mobile app as staff).
+ * Requires that no profile row with this email exists yet.
+ */
+export async function createStaffWithMobileLogin(
+  input: StaffInput & { login_email: string },
+): Promise<QuickProvisionResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+  const normalized = normalizeLoginEmail(input.login_email);
+  if (!normalized || !normalized.includes('@')) {
+    return { ok: false, message: 'Enter a valid login email.' };
+  }
+
+  const { rows, error: loadErr } = await loadProfilesByEmail(normalized);
+  if (loadErr) {
+    return { ok: false, message: loadErr };
+  }
+  if (rows.length > 0) {
+    return {
+      ok: false,
+      message:
+        'A profile with this email already exists. Use another login email or link an existing resident profile.',
+    };
+  }
+
+  const ephemeral = createEphemeralAuthClient();
+  if (!ephemeral) {
+    return { ok: false, message: 'Supabase is not configured.' };
+  }
+
+  const now = new Date().toISOString();
+  const name = input.full_name.trim() || displayNameFromEmail(normalized);
+  const { data: inserted, error: insErr } = await supabase
+    .from('profiles')
+    .insert({
+      full_name: name,
+      email: normalized,
+      contact_number: input.phone.trim() || null,
+      must_complete_profile: true,
+      updated_at: now,
+    })
+    .select('id')
+    .single();
+  if (insErr) {
+    return { ok: false, message: insErr.message };
+  }
+  const profileId = String(inserted!.id);
+
+  const temporaryPassword = generateTemporaryPassword();
+  const { data: signData, error: signErr } = await ephemeral.auth.signUp({
+    email: normalized,
+    password: temporaryPassword,
+  });
+
+  if (signErr) {
+    await supabase.from('profiles').delete().eq('id', profileId);
+    return { ok: false, message: formatSignUpErrorForAdmin(signErr.message) };
+  }
+
+  const userId = signData.user?.id;
+  if (!userId) {
+    await supabase.from('profiles').delete().eq('id', profileId);
+    return {
+      ok: false,
+      message:
+        'No user id returned. In Supabase: Authentication → Providers → Email — disable “Confirm email” for local testing, then try again.',
+    };
+  }
+
+  const { error: upErr } = await supabase
+    .from('profiles')
+    .update({
+      user_id: userId,
+      must_change_password: true,
+      must_complete_profile: true,
+      updated_at: now,
+    })
+    .eq('id', profileId);
+
+  if (upErr) {
+    return {
+      ok: false,
+      message: `Auth user was created but linking failed: ${upErr.message}.`,
+    };
+  }
+
+  const { error: stErr } = await supabase.from('staff_members').insert({
+    full_name: name,
+    role: input.role.trim() || null,
+    phone: input.phone.trim() || null,
+    hazard_types: input.hazard_types,
+    active: input.active,
+    profile_id: profileId,
+  });
+
+  if (stErr) {
+    return {
+      ok: false,
+      message: `Login created but staff row failed: ${stErr.message}. You can add the staff row manually and link profile ${profileId}.`,
+    };
+  }
+
+  return { ok: true, temporaryPassword, profileId };
+}
+
+/**
+ * Quick staff invite by email only (placeholder name/role). Prefer {@link createStaffWithMobileLogin} from the form.
+ */
+export async function createStaffWithEmailOnlyLogin(email: string): Promise<QuickProvisionResult> {
+  const normalized = normalizeLoginEmail(email);
+  if (!normalized || !normalized.includes('@')) {
+    return { ok: false, message: 'Enter a valid email.' };
+  }
+  return createStaffWithMobileLogin({
+    full_name: `${displayNameFromEmail(normalized)} (staff)`,
+    role: 'Response staff',
+    phone: '',
+    hazard_types: [],
+    active: true,
+    profile_id: null,
+    login_email: normalized,
+  });
+}
+
 function formatSignUpErrorForAdmin(raw: string): string {
   const m = raw.trim();
   const lower = m.toLowerCase();
@@ -709,7 +986,7 @@ function formatSignUpErrorForAdmin(raw: string): string {
       '',
       'Supabase is temporarily limiting sign-ups and auth emails. Wait a few minutes, then try again.',
       'While testing: Authentication → Providers → Email → disable “Confirm email” so fewer messages are sent.',
-      'Need many test accounts? Use Authentication → Users → Add user, then link the resident here (App logins), or clear profiles.user_id on the member and use Create login again.',
+      'Need many test accounts? Use Authentication → Users → Add user, then link the resident (Users page or Members), or clear profiles.user_id on the member and add by email again.',
     );
     return lines.join('\n');
   }
@@ -738,8 +1015,8 @@ function formatSignUpErrorForAdmin(raw: string): string {
 }
 
 /**
- * Registers a Supabase Auth user (mobile app login) and sets profiles.user_id.
- * Uses the anon key + signUp (no service role in the browser). Requires open RLS on profiles for updates.
+ * Links an existing profile row to a new Auth user (signUp + profiles.user_id).
+ * The admin UI uses {@link createResidentWithEmailOnlyLogin} instead (email only, no profile picker).
  */
 export async function createMobileAppLogin(params: {
   email: string;
@@ -813,4 +1090,193 @@ export async function createMobileAppLogin(params: {
   }
 
   return { ok: true, temporaryPassword };
+}
+
+export type AppAdminDashboardRole = 'superadmin' | 'admin';
+
+export type AppAdminRow = {
+  userId: string;
+  email: string;
+  role: AppAdminDashboardRole;
+  createdAt: string;
+};
+
+export type MyAdminAccess = {
+  role: AppAdminDashboardRole;
+  mustChangePassword: boolean;
+};
+
+export async function fetchMyAdminAccess(): Promise<MyAdminAccess | null> {
+  if (!isSupabaseConfigured || !supabase) {
+    return null;
+  }
+  const { data: userData } = await supabase.auth.getUser();
+  const uid = userData.user?.id;
+  if (!uid) {
+    return null;
+  }
+  const { data, error } = await supabase
+    .from('app_admins')
+    .select('role,must_change_password')
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error || !data?.role) {
+    return null;
+  }
+  const r = String(data.role);
+  if (r !== 'superadmin' && r !== 'admin') {
+    return null;
+  }
+  return {
+    role: r,
+    mustChangePassword: (data as { must_change_password?: boolean }).must_change_password === true,
+  };
+}
+
+/** Updates Supabase Auth password and clears app_admins.must_change_password for the signed-in dashboard user. */
+export async function completeAdminPasswordChange(newPassword: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const pwd = newPassword.trim();
+  if (pwd.length < MIN_DASHBOARD_PASSWORD_LEN) {
+    throw new Error(`Password must be at least ${MIN_DASHBOARD_PASSWORD_LEN} characters.`);
+  }
+  const { error: authErr } = await supabase.auth.updateUser({ password: pwd });
+  if (authErr) {
+    throw new Error(formatSupabaseCallError(authErr));
+  }
+  const { error: rpcErr } = await supabase.rpc('app_admin_clear_must_change_password');
+  if (rpcErr) {
+    throw new Error(formatSupabaseCallError(rpcErr));
+  }
+}
+
+export async function superadminListAppAdmins(): Promise<AppAdminRow[]> {
+  if (!isSupabaseConfigured || !supabase) {
+    return [];
+  }
+  const { data, error } = await supabase.rpc('superadmin_list_app_admins');
+  if (error) {
+    throw error;
+  }
+  return (data ?? []).map(
+    (row: { user_id: string; email: string; role: string; created_at: string }) => ({
+      userId: String(row.user_id),
+      email: String(row.email ?? ''),
+      role: (row.role === 'superadmin' ? 'superadmin' : 'admin') as AppAdminDashboardRole,
+      createdAt: String(row.created_at ?? ''),
+    }),
+  );
+}
+
+/** Postgrest / Auth errors from @supabase/supabase-js are plain objects, not always `instanceof Error`. */
+function formatSupabaseCallError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (!err || typeof err !== 'object') {
+    return 'Request failed.';
+  }
+  const e = err as { message?: string; details?: string; hint?: string };
+  const line = [e.message, e.details, e.hint].filter(Boolean).join(' — ');
+  return line || 'Request failed.';
+}
+
+export type SuperadminAddAdminResult = {
+  /** Present when a new Auth user was created via anon signUp (copy for the new admin). */
+  temporaryPassword?: string;
+};
+
+function isMissingAuthUserRpcMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes('no auth user with that email') ||
+    m.includes('create the user under authentication') ||
+    m.includes('invite or add user')
+  );
+}
+
+/**
+ * Grants dashboard access. If the email is not in Auth yet, creates it the same way as resident
+ * “Create login” (ephemeral anon signUp + temp password) — no Supabase Dashboard step.
+ */
+export async function superadminAddAdminByEmail(
+  email: string,
+  role: AppAdminDashboardRole,
+): Promise<SuperadminAddAdminResult> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('Enter a valid email.');
+  }
+
+  const runRpc = async (pMustChangePassword: boolean) =>
+    supabase.rpc('superadmin_add_admin_by_email', {
+      p_email: normalized,
+      p_role: role,
+      p_must_change_password: pMustChangePassword,
+    });
+
+  let { error } = await runRpc(false);
+  if (!error) {
+    return {};
+  }
+
+  const firstMsg = formatSupabaseCallError(error);
+  if (!isMissingAuthUserRpcMessage(firstMsg)) {
+    throw new Error(firstMsg);
+  }
+
+  const ephemeral = createEphemeralAuthClient();
+  if (!ephemeral) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const temporaryPassword = generateTemporaryPassword();
+  const { data, error: signErr } = await ephemeral.auth.signUp({
+    email: normalized,
+    password: temporaryPassword,
+  });
+
+  if (signErr) {
+    const sm = signErr.message.toLowerCase();
+    if (
+      sm.includes('already registered') ||
+      sm.includes('already been registered') ||
+      sm.includes('user already exists')
+    ) {
+      ({ error } = await runRpc(false));
+      if (!error) {
+        return {};
+      }
+      throw new Error(formatSupabaseCallError(error));
+    }
+    throw new Error(formatSignUpErrorForAdmin(signErr.message));
+  }
+
+  if (!data.user?.id) {
+    throw new Error(
+      'No user id returned. In Supabase: Authentication → Providers → Email — disable “Confirm email” for local testing, then try again.',
+    );
+  }
+
+  ({ error } = await runRpc(true));
+  if (!error) {
+    return { temporaryPassword };
+  }
+  throw new Error(formatSupabaseCallError(error));
+}
+
+export async function superadminRemoveAdmin(userId: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+  const { error } = await supabase.rpc('superadmin_remove_admin', { p_user_id: userId });
+  if (error) {
+    throw new Error(formatSupabaseCallError(error));
+  }
 }

@@ -1,3 +1,5 @@
+import * as FileSystemLegacy from 'expo-file-system/legacy';
+import { persistPickedMediaUri } from '../utils/persistMediaUri';
 import { PersonalInfo } from '../types/profile';
 import { ReadinessState } from '../types/readiness';
 import { isSupabaseConfigured, supabase, supabaseConfigError } from '../lib/supabase';
@@ -123,6 +125,7 @@ export type ProfileWithMeta = {
   id: string;
   profile: PersonalInfo;
   mustChangePassword: boolean;
+  mustCompleteProfile: boolean;
 };
 
 function mapProfileRow(data: {
@@ -137,10 +140,12 @@ function mapProfileRow(data: {
   contact_person_number: string | null;
   avatar_url: string | null;
   must_change_password?: boolean | null;
+  must_complete_profile?: boolean | null;
 }): ProfileWithMeta {
   return {
     id: String(data.id),
     mustChangePassword: data.must_change_password === true,
+    mustCompleteProfile: data.must_complete_profile === true,
     profile: {
       fullName: String(data.full_name ?? ''),
       address: String(data.address ?? ''),
@@ -155,12 +160,20 @@ function mapProfileRow(data: {
   };
 }
 
+function isPersistedRefreshTokenBroken(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes('refresh token') || m.includes('invalid refresh');
+}
+
 export async function getAuthSession() {
   if (!isSupabaseConfigured || !supabase) {
     return null;
   }
   const { data, error } = await supabase.auth.getSession();
   if (error) {
+    if (isPersistedRefreshTokenBroken(error.message ?? '')) {
+      await supabase.auth.signOut({ scope: 'local' });
+    }
     return null;
   }
   return data.session ?? null;
@@ -225,7 +238,7 @@ export function formatSignUpErrorMessage(err: unknown): string {
       '',
       'Supabase is temporarily limiting sign-ups and auth emails. Wait a few minutes, then try again.',
       'While testing: Authentication → Providers → Email → disable “Confirm email” so fewer messages are sent.',
-      'Need many test accounts? Create users under Authentication → Users in the Dashboard, or ask staff to use the admin App logins page instead of signing up repeatedly.',
+      'Need many test accounts? Create users under Authentication → Users in the Dashboard, or ask staff to use the admin Users page instead of signing up repeatedly.',
     );
     return lines.join('\n');
   }
@@ -345,7 +358,7 @@ export async function fetchProfileByAuthUserId(authUserId: string): Promise<Prof
   const { data, error } = await client
     .from('profiles')
     .select(
-      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,must_change_password',
+      'id,full_name,address,contact_number,gender,age,email,contact_person,contact_person_number,avatar_url,must_change_password,must_complete_profile',
     )
     .eq('user_id', authUserId)
     .maybeSingle();
@@ -362,10 +375,26 @@ export async function saveProfileRemote(
   existingProfileId: string | null,
 ) {
   const client = requireSupabase();
-  let avatarUrl: string | null = profile.avatarUrl || null;
 
-  if (avatarUrl && !/^https?:\/\//i.test(avatarUrl)) {
-    avatarUrl = await uploadFileToEvidenceBucket(avatarUrl, 'profile-avatars');
+  const rawAvatar = (profile.avatarUrl ?? '').trim();
+  /** `undefined` = leave existing `avatar_url` unchanged (update only). */
+  let avatar_url: string | null | undefined = null;
+
+  if (!rawAvatar) {
+    avatar_url = null;
+  } else if (/^https?:\/\//i.test(rawAvatar)) {
+    avatar_url = rawAvatar;
+  } else {
+    try {
+      const stableUri = await persistPickedMediaUri(rawAvatar, 'avatar');
+      avatar_url = await uploadFileToEvidenceBucket(stableUri, 'profile-avatars');
+    } catch {
+      if (existingProfileId) {
+        avatar_url = undefined;
+      } else {
+        avatar_url = null;
+      }
+    }
   }
 
   const {
@@ -373,7 +402,7 @@ export async function saveProfileRemote(
   } = await client.auth.getUser();
   const authUserId = user?.id ?? null;
 
-  const payload = {
+  const basePayload = {
     full_name: profile.fullName,
     address: profile.address,
     contact_number: profile.contactNumber,
@@ -382,11 +411,17 @@ export async function saveProfileRemote(
     email: profile.email,
     contact_person: profile.contactPerson,
     contact_person_number: profile.contactPersonNumber,
-    avatar_url: avatarUrl,
+    must_complete_profile: false,
   };
 
   if (existingProfileId) {
-    const updatePayload = authUserId ? { ...payload, user_id: authUserId } : payload;
+    const updatePayload: Record<string, unknown> = {
+      ...basePayload,
+      ...(authUserId ? { user_id: authUserId } : {}),
+    };
+    if (avatar_url !== undefined) {
+      updatePayload.avatar_url = avatar_url;
+    }
     const { data, error } = await client
       .from('profiles')
       .update(updatePayload)
@@ -402,7 +437,11 @@ export async function saveProfileRemote(
     };
   }
 
-  const insertPayload = authUserId ? { ...payload, user_id: authUserId } : payload;
+  const insertPayload = {
+    ...basePayload,
+    avatar_url: avatar_url ?? null,
+    ...(authUserId ? { user_id: authUserId } : {}),
+  };
 
   const { data, error } = await client
     .from('profiles')
@@ -424,8 +463,8 @@ export async function fetchLatestProfile(): Promise<ProfileWithMeta | null> {
     return null;
   }
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const uid = sessionData.session?.user?.id;
+  const session = await getAuthSession();
+  const uid = session?.user?.id;
   if (!uid) {
     return null;
   }
@@ -535,17 +574,124 @@ async function uploadReportAudio(audioUri: string) {
   return uploadFileToEvidenceBucket(audioUri, 'audio-reports');
 }
 
+function isRemoteHttpUri(uri: string): boolean {
+  return /^https?:\/\//i.test(uri);
+}
+
+function evidenceContentType(extension: string, folder: string): string {
+  const e = extension.toLowerCase();
+  if (folder === 'audio-reports') {
+    if (e === 'm4a' || e === 'mp4') {
+      return 'audio/mp4';
+    }
+    if (e === 'caf') {
+      return 'audio/x-caf';
+    }
+    if (e === 'mp3') {
+      return 'audio/mpeg';
+    }
+    if (e === 'wav') {
+      return 'audio/wav';
+    }
+    if (e === 'aac') {
+      return 'audio/aac';
+    }
+    return 'audio/mp4';
+  }
+  if (e === 'jpg' || e === 'jpeg') {
+    return 'image/jpeg';
+  }
+  if (e === 'png') {
+    return 'image/png';
+  }
+  if (e === 'webp') {
+    return 'image/webp';
+  }
+  if (e === 'heic' || e === 'heif') {
+    return 'image/heic';
+  }
+  return 'application/octet-stream';
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = globalThis.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+/**
+ * Prefer legacy base64 read (stable on Android for file:// / content://). Copy-to-cache if direct read fails.
+ */
+async function readDeviceMediaAsArrayBuffer(uri: string): Promise<ArrayBuffer> {
+  const fromBase64File = async (sourceUri: string) => {
+    const base64 = await FileSystemLegacy.readAsStringAsync(sourceUri, {
+      encoding: FileSystemLegacy.EncodingType.Base64,
+    });
+    return base64ToArrayBuffer(base64);
+  };
+
+  try {
+    return await fromBase64File(uri);
+  } catch (first) {
+    const cacheDir = FileSystemLegacy.cacheDirectory;
+    if (cacheDir) {
+      const dest = `${cacheDir}evidence-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.bin`;
+      try {
+        await FileSystemLegacy.copyAsync({ from: uri, to: dest });
+        const buf = await fromBase64File(dest);
+        await FileSystemLegacy.deleteAsync(dest, { idempotent: true });
+        return buf;
+      } catch {
+        try {
+          await FileSystemLegacy.deleteAsync(dest, { idempotent: true });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    try {
+      const response = await fetch(uri);
+      if (!response.ok) {
+        throw new Error(`Could not read media (HTTP ${response.status})`);
+      }
+      return await response.arrayBuffer();
+    } catch {
+      throw first;
+    }
+  }
+}
+
 async function uploadFileToEvidenceBucket(fileUri: string, folder: string) {
   const client = requireSupabase();
-  const response = await fetch(fileUri);
-  const blob = await response.blob();
   const extension = fileUri.split('.').pop()?.split('?')[0] || 'bin';
   const filePath = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
 
+  let body: ArrayBuffer;
+  let contentType: string;
+
+  if (isRemoteHttpUri(fileUri)) {
+    const response = await fetch(fileUri);
+    if (!response.ok) {
+      throw new Error(`Could not read media for upload (HTTP ${response.status})`);
+    }
+    const blob = await response.blob();
+    body = await blob.arrayBuffer();
+    contentType =
+      blob.type && blob.type !== ''
+        ? blob.type
+        : evidenceContentType(extension, folder);
+  } else {
+    body = await readDeviceMediaAsArrayBuffer(fileUri);
+    contentType = evidenceContentType(extension, folder);
+  }
+
   const { error } = await client.storage
     .from('incident-evidence')
-    .upload(filePath, blob, {
-      contentType: blob.type || 'application/octet-stream',
+    .upload(filePath, body, {
+      contentType,
       upsert: false,
     });
   if (error) {
@@ -586,32 +732,26 @@ export async function submitIncidentReport(input: ReportInput): Promise<SubmitIn
     audioUrl = await uploadReportAudio(input.audioUri);
   }
 
-  const { data, error } = await client
-    .from('incident_reports')
-    .insert({
-      profile_id: input.profileId,
-      reporter_name: input.reporterName || null,
-      reporter_contact: input.reporterContact || null,
-      hazard_type: input.hazardType,
-      location_text: input.locationText || null,
-      description: input.description,
-      evidence_url: evidenceUrl,
-      audio_url: audioUrl,
-      latitude:
-        input.latitude != null && Number.isFinite(input.latitude) ? input.latitude : null,
-      longitude:
-        input.longitude != null && Number.isFinite(input.longitude) ? input.longitude : null,
-      status: 'submitted',
-    })
-    .select('id, staff_members(full_name)')
-    .single();
+  const { data, error } = await client.rpc('submit_incident_report', {
+    p_hazard_type: input.hazardType,
+    p_description: input.description,
+    p_location_text: input.locationText?.trim() ? input.locationText : null,
+    p_reporter_name: input.reporterName?.trim() ? input.reporterName : null,
+    p_reporter_contact: input.reporterContact?.trim() ? input.reporterContact : null,
+    p_evidence_url: evidenceUrl,
+    p_audio_url: audioUrl,
+    p_latitude:
+      input.latitude != null && Number.isFinite(input.latitude) ? input.latitude : null,
+    p_longitude:
+      input.longitude != null && Number.isFinite(input.longitude) ? input.longitude : null,
+  });
 
   if (error) {
     throw error;
   }
 
-  const embed = data?.staff_members as { full_name?: string } | null | undefined;
-  const name = embed?.full_name ? String(embed.full_name) : '';
+  const row = data as { assigned_staff_name?: string } | null | undefined;
+  const name = row?.assigned_staff_name ? String(row.assigned_staff_name).trim() : '';
   return name ? { assignedStaffName: name } : {};
 }
 

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DRAE — Data Flow Diagrams (Level 0–3)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+      :root {
+        --ink: #1a1f2e;
+        --muted: #5c6578;
+        --paper: #f4f1eb;
+        --card: #fffdf8;
+        --accent: #c45c3e;
+        --accent-soft: #e8d5cf;
+        --line: #2c3548;
+        --store: #3d5a80;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Source Sans 3", system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--paper);
+        line-height: 1.55;
+      }
+
+      header {
+        background: linear-gradient(135deg, var(--line) 0%, #1e3a5f 100%);
+        color: #f0ebe3;
+        padding: 2.5rem 1.5rem 3rem;
+        clip-path: polygon(0 0, 100% 0, 100% 92%, 0 100%);
+      }
+
+      header h1 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-weight: 400;
+        font-size: clamp(1.75rem, 4vw, 2.35rem);
+        margin: 0 0 0.5rem;
+        letter-spacing: 0.02em;
+      }
+
+      header p {
+        margin: 0;
+        max-width: 42rem;
+        opacity: 0.9;
+        font-size: 1.05rem;
+      }
+
+      .wrap {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 0 1.25rem 3rem;
+      }
+
+      nav.toc {
+        margin: -2rem 0 2rem;
+        padding: 1.25rem 1.5rem;
+        background: var(--card);
+        border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(26, 31, 46, 0.08);
+        border: 1px solid rgba(44, 53, 72, 0.08);
+      }
+
+      nav.toc strong {
+        display: block;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--accent);
+        margin-bottom: 0.75rem;
+      }
+
+      nav.toc a {
+        color: var(--line);
+        text-decoration: none;
+        font-weight: 600;
+        margin-right: 1.25rem;
+        white-space: nowrap;
+      }
+
+      nav.toc a:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+
+      section {
+        margin-bottom: 3rem;
+      }
+
+      section h2 {
+        font-family: "DM Serif Display", Georgia, serif;
+        font-weight: 400;
+        font-size: 1.5rem;
+        border-bottom: 3px solid var(--accent-soft);
+        padding-bottom: 0.35rem;
+        margin: 0 0 0.75rem;
+      }
+
+      .legend {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin: 0 0 1rem;
+      }
+
+      .diagram {
+        background: var(--card);
+        border-radius: 12px;
+        padding: 1rem;
+        border: 1px solid rgba(44, 53, 72, 0.1);
+        overflow-x: auto;
+      }
+
+      .mermaid {
+        display: flex;
+        justify-content: center;
+      }
+
+      .note {
+        margin-top: 1rem;
+        padding: 0.85rem 1rem;
+        background: rgba(61, 90, 128, 0.08);
+        border-left: 4px solid var(--store);
+        font-size: 0.92rem;
+        border-radius: 0 8px 8px 0;
+      }
+
+      footer {
+        text-align: center;
+        padding: 2rem 1rem;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <h1>DRAE Platform — Data Flow Diagrams</h1>
+        <p>
+          Context through Level 3 for the City of Dasmariñas disaster risk awareness ecosystem
+          (resident mobile app, CDRRMO admin web, Supabase backend). Notation: rounded = process,
+          square = external entity, open rectangle = data store, arrows = data flows.
+        </p>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <nav class="toc">
+        <strong>Jump to</strong>
+        <a href="#l0">Level 0 — Context</a>
+        <a href="#l1">Level 1</a>
+        <a href="#l2">Level 2</a>
+        <a href="#l3">Level 3</a>
+      </nav>
+
+      <section id="l0">
+        <h2>Level 0 — Context diagram</h2>
+        <p class="legend">
+          Single system boundary: <strong>DRAE</strong> exchanges data with residents, CDRRMO
+          administrators, and optional external information services. Central persistence is modeled
+          inside the platform at higher levels.
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart LR
+  subgraph ext["External entities"]
+    E1["Resident / household user"]
+    E2["CDRRMO admin & field staff"]
+    E3["External info sources\n(weather APIs, static guidance)"]
+  end
+
+  S(("DRAE system\n(Mobile + Admin + API)"))
+
+  E1 <-->|"Credentials, profile,\nincident reports,\nadvisories, hotlines"| S
+  E2 <-->|"Residents, staff, reports,\nadvisories, hotlines,\nev centers"| S
+  E3 -->|"Supplemental weather /\nreference payloads"| S
+          </pre>
+        </div>
+        <p class="note">
+          Level 0 hides internal processes and data stores; it answers what interacts with the system,
+          not how work is split inside it.
+        </p>
+      </section>
+
+      <section id="l1">
+        <h2>Level 1 — Major processes</h2>
+        <p class="legend">
+          Decomposition of DRAE into coordinated processes and shared data stores (Supabase
+          tables / storage).
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart TB
+  E1["Resident"]
+  E2["CDRRMO admin / staff"]
+
+  P1["1.0\nAuthenticate &\nmanage profile"]
+  P2["2.0\nIncident reporting\n& assignment"]
+  P3["3.0\nAdvisories &\nnotifications"]
+  P4["4.0\nAdmin master data"]
+  P5["5.0\nReference content\n(evacuation, hotlines,\nreadiness)"]
+
+  D1[("D1\nProfiles /\nAuth link")]
+  D2[("D2\nIncident reports")]
+  D3[("D3\nAdvisories")]
+  D4[("D4\nStaff members")]
+  D5[("D5\nHotlines &\nev centers /\nreadiness")]
+
+  E1 --> P1
+  E1 --> P2
+  E1 --> P3
+  E1 --> P5
+  E2 --> P4
+  E2 --> P2
+  E2 --> P3
+
+  P1 <--> D1
+  P2 <--> D1
+  P2 <--> D2
+  P2 <--> D4
+  P3 <--> D3
+  P4 <--> D1
+  P4 <--> D4
+  P4 <--> D5
+  P4 <--> D3
+  P5 <--> D5
+  P5 <--> D1
+          </pre>
+        </div>
+      </section>
+
+      <section id="l2">
+        <h2>Level 2 — Key subprocesses</h2>
+        <p class="legend">
+          Refinement of incident reporting (2.x) and administration (4.x). Other branches can be
+          expanded the same way if needed.
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart TB
+  subgraph rep["2.0 Incident reporting — Level 2"]
+    direction TB
+    P21["2.1\nCapture report\n(hazard, location,\ndescription)"]
+    P22["2.2\nAttach evidence\n(photo / audio)"]
+    P23["2.3\nSubmit & sync\n(local queue)"]
+    P24["2.4\nAssign responder\n(rule / admin)"]
+    D2[("D2\nIncident reports")]
+    D1[("D1\nProfiles")]
+    D4[("D4\nStaff")]
+    P21 --> P22 --> P23 --> P24
+    P21 --> D1
+    P23 --> D2
+    P24 --> D2
+    P24 --> D4
+  end
+
+  subgraph adm["4.0 Admin master data — Level 2"]
+    direction TB
+    P41["4.1\nResidents /\nprofiles CRUD"]
+    P42["4.2\nStaff &\nassignments"]
+    P43["4.3\nHotlines &\nev centers"]
+    P44["4.4\nAdvisories\n(verify, activate)"]
+    Da[("D1 Profiles")]
+    Db[("D4 Staff")]
+    Dc[("D5 Hotlines /\nEv centers")]
+    Dd[("D3 Advisories")]
+    P41 <--> Da
+    P42 <--> Db
+    P42 <--> Da
+    P43 <--> Dc
+    P44 <--> Dd
+  end
+          </pre>
+        </div>
+      </section>
+
+      <section id="l3">
+        <h2>Level 3 — Detail (incident capture &amp; submit)</h2>
+        <p class="legend">
+          Further decomposition of <strong>2.1–2.3</strong> (mobile-side capture through Supabase
+          persistence). Level 3 stops where implementation detail (exact REST calls) begins.
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart LR
+  subgraph cap["2.1 Capture report"]
+    P211["2.1.1\nSelect hazard /\nbarangay context"]
+    P212["2.1.2\nEnter location text /\nGPS"]
+    P213["2.1.3\nCompose description"]
+  end
+
+  subgraph media["2.2 Media"]
+    P221["2.2.1\nPick / record\nmedia"]
+    P222["2.2.2\nUpload to\nobject storage"]
+  end
+
+  subgraph sync["2.3 Submit & sync"]
+    P231["2.3.1\nValidate &\npackage DTO"]
+    P232["2.3.2\nInsert / update\nincident row"]
+    P233["2.3.3\nRetry queue\nif offline"]
+  end
+
+  D2[("D2\nIncident reports")]
+  ST[("Object storage\n(evidence URLs)")]
+
+  P211 --> P212 --> P213
+  P213 --> P221 --> P222
+  P222 --> ST
+  P213 --> P231
+  P222 --> P231
+  P231 --> P232
+  P231 --> P233
+  P232 --> D2
+  P233 -.->|deferred| P232
+          </pre>
+        </div>
+        <p class="note">
+          Parallel Level 3 diagrams can be drawn for <strong>4.4 Advisories</strong> (draft → verify
+          → publish) or <strong>1.0 Authentication</strong> (sign-in → session → profile bind) using
+          the same pattern.
+        </p>
+      </section>
+    </div>
+
+    <footer>DRAE / CDRRMO Dasmariñas — DFD reference for documentation and defense</footer>
+
+    <script>
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "base",
+        themeVariables: {
+          primaryColor: "#fffdf8",
+          primaryTextColor: "#1a1f2e",
+          primaryBorderColor: "#2c3548",
+          lineColor: "#2c3548",
+          secondaryColor: "#e8d5cf",
+          tertiaryColor: "#f4f1eb",
+          fontFamily: "Source Sans 3, sans-serif",
+        },
+        flowchart: {
+          curve: "basis",
+          padding: 12,
+          nodeSpacing: 28,
+          rankSpacing: 40,
+        },
+      });
+    </script>
+  </body>
+</html>

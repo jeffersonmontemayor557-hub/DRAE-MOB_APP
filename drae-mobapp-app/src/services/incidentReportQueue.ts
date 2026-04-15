@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
+import { persistIncidentReportPayloadMedia } from '../utils/persistMediaUri';
 import { submitIncidentReport, type SubmitIncidentResult } from './supabaseService';
 
 const QUEUE_KEY = 'drae_incident_report_queue_v1';
@@ -110,7 +111,9 @@ export async function removeQueuedIncidentReport(localId: string) {
 
 export async function updateQueuedIncidentReport(
   localId: string,
-  patch: Partial<Pick<QueuedIncidentReport, 'status' | 'lastError' | 'lastSyncAttemptAt'>>,
+  patch: Partial<
+    Pick<QueuedIncidentReport, 'status' | 'lastError' | 'lastSyncAttemptAt' | 'payload'>
+  >,
 ) {
   const queue = await loadIncidentReportQueue();
   await saveQueue(
@@ -154,7 +157,29 @@ export async function processIncidentReportQueue(): Promise<{
       lastError: undefined,
     });
     try {
-      await submitIncidentReport(item.payload);
+      let payload = item.payload;
+      try {
+        payload = await persistIncidentReportPayloadMedia(item.payload);
+        if (
+          payload.photoUri !== item.payload.photoUri ||
+          payload.audioUri !== item.payload.audioUri
+        ) {
+          await updateQueuedIncidentReport(item.localId, { payload });
+        }
+      } catch (persistErr) {
+        const hint =
+          'Photo or audio is no longer on this device (cache was cleared). Remove this queued report in My Reports, then submit again with new attachments.';
+        const msg = formatSyncError(persistErr, hint);
+        errors.push(msg);
+        failedLocalIds.push(item.localId);
+        await updateQueuedIncidentReport(item.localId, {
+          status: 'pending',
+          lastError: msg,
+          lastSyncAttemptAt: new Date().toISOString(),
+        });
+        continue;
+      }
+      await submitIncidentReport(payload);
       await removeQueuedIncidentReport(item.localId);
       processed += 1;
     } catch (err) {
@@ -176,17 +201,18 @@ export async function trySubmitIncidentReportOrQueue(
 ): Promise<
   { ok: true; mode: 'submitted'; result: SubmitIncidentResult } | { ok: true; mode: 'queued'; localId: string }
 > {
+  const withMedia = await persistIncidentReportPayloadMedia(payload);
   const online = await isOnline();
   if (!online) {
-    const q = await enqueueIncidentReport(payload);
+    const q = await enqueueIncidentReport(withMedia);
     return { ok: true, mode: 'queued', localId: q.localId };
   }
   try {
-    const result = await submitIncidentReport(payload);
+    const result = await submitIncidentReport(withMedia);
     return { ok: true, mode: 'submitted', result };
   } catch (err) {
     const message = formatSyncError(err, 'Submit failed');
-    const q = await enqueueIncidentReport(payload);
+    const q = await enqueueIncidentReport(withMedia);
     await updateQueuedIncidentReport(q.localId, {
       lastError: message,
       lastSyncAttemptAt: new Date().toISOString(),

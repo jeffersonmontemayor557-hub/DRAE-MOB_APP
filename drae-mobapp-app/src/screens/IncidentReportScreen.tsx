@@ -28,7 +28,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../App';
+import { goBackOrMainTabs } from '../navigation/goBackOrMainTabs';
 import { DASMARINAS_BARANGAYS } from '../constants/dasmarinasBarangays';
+import { persistPickedMediaUri } from '../utils/persistMediaUri';
 import { useAppData } from '../context/AppDataContext';
 import { trySubmitIncidentReportOrQueue } from '../services/incidentReportQueue';
 import { alertPermissionBlocked, confirmPermissionStep } from '../utils/permissionDialogs';
@@ -104,7 +106,13 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
     });
 
     if (!result.canceled) {
-      setPhotoUri(result.assets[0].uri);
+      try {
+        const stableUri = await persistPickedMediaUri(result.assets[0].uri, 'incident-photo');
+        setPhotoUri(stableUri);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not save the photo file.';
+        Alert.alert('Photo Error', message);
+      }
     }
   };
 
@@ -150,7 +158,18 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
     try {
       await recorder.stop();
       const status = recorder.getStatus();
-      setAudioUri(status.url ?? recorder.uri ?? null);
+      const rawUri = status.url ?? recorder.uri ?? null;
+      if (rawUri) {
+        try {
+          setAudioUri(await persistPickedMediaUri(rawUri, 'incident-audio'));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Could not save the recording file.';
+          Alert.alert('Audio Error', message);
+          setAudioUri(null);
+        }
+      } else {
+        setAudioUri(null);
+      }
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
@@ -229,7 +248,7 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
         Alert.alert(
           'Saved offline',
           'No connection or the server was unreachable. Your report is stored on this device and will send automatically when you are online. You can check status under Profile → My Reports.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }],
+          [{ text: 'OK', onPress: () => goBackOrMainTabs(navigation) }],
         );
         return;
       }
@@ -241,7 +260,7 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
       Alert.alert(
         'Report Submitted',
         `Thank you${profile.fullName ? `, ${profile.fullName}` : ''}. Your ${hazard.toLowerCase()} report has been sent to CDRRMO.${assignNote}`,
-        [{ text: 'OK', onPress: () => navigation.goBack() }],
+        [{ text: 'OK', onPress: () => goBackOrMainTabs(navigation) }],
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';

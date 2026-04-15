@@ -11,6 +11,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
+import { goBackOrMainTabs } from '../navigation/goBackOrMainTabs';
 import { AppleRefreshControl } from '../components/AppleRefreshControl';
 import { useAppData } from '../context/AppDataContext';
 import {
@@ -77,7 +78,7 @@ export default function StaffAssignmentsScreen() {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={styles.headerRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12}>
+          <TouchableOpacity onPress={() => goBackOrMainTabs(navigation)} hitSlop={12}>
             <Text style={styles.back}>← Back</Text>
           </TouchableOpacity>
         </View>
@@ -95,7 +96,7 @@ export default function StaffAssignmentsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.headerRow}>
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12}>
+        <TouchableOpacity onPress={() => goBackOrMainTabs(navigation)} hitSlop={12}>
           <Text style={styles.back}>← Back</Text>
         </TouchableOpacity>
       </View>

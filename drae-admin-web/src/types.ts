@@ -51,6 +51,8 @@ export type StaffInput = {
   hazard_types: string[];
   active: boolean;
   profile_id: string | null;
+  /** When creating staff: if set, creates a linked profile + mobile login (temporary password shown). */
+  login_email?: string;
 };
 
 export type Report = {

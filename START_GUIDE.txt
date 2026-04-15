@@ -38,7 +38,10 @@ Usually Vite shows something like:
 http://localhost:5173
 
 Use .env with the same VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY as your Supabase project.
-To create mobile app logins without the Supabase Dashboard: open “App logins” in the sidebar, pick a resident, enter a login email, submit. The site shows a one-time temporary password—copy it for the resident; they sign in once, then the app prompts them to set a new password. Apply the Supabase migration that adds profiles.must_change_password if you have not already. Disable “Confirm email” under Authentication → Providers → Email while testing.
+
+The admin site now requires sign-in: use an email/password from Supabase Authentication → Users. That user must have a row in public.app_admins (role admin or superadmin). After login, the sidebar and top bar show “Admin” or “Superadmin”. Only superadmins see the “Administrators” nav item to add other admins.
+
+To create mobile app users without the Supabase Dashboard: open “Users” in the sidebar (or use Members — same flow), enter an email, submit. The site shows a one-time temporary password—copy it for the resident; they sign in once on the mobile app, then set a new password. Apply the Supabase migration that adds profiles.must_change_password if you have not already. Disable “Confirm email” under Authentication → Providers → Email while testing.
 
 3. IF COMMANDS ARE NOT RECOGNIZED
 
@@ -51,7 +54,7 @@ Then run the commands again.
 4. SUPABASE LOGIN (INVALID CREDENTIALS)
 
 If the app says invalid login credentials but the password looks right:
-- SQL seed files do not create Auth users. Either use admin web → “App logins”, or add users in Supabase Dashboard → Authentication → Users (with “Auto Confirm User” or email confirmation disabled for dev).
+- SQL seed files do not create Auth users. Either use admin web → “Users” (or Members), or add users in Supabase Dashboard → Authentication → Users (with “Auto Confirm User” or email confirmation disabled for dev).
 - If you used the Dashboard only, run drae-mobapp-app/supabase/link_demo_auth_users.sql to attach users to seeded profiles. See DEMO_LOGIN_CREDENTIALS.txt.
 
 5. SUPABASE: APPLY SQL MIGRATIONS (UPLOAD / API ERRORS)
@@ -89,7 +92,7 @@ Mobile:
 - go to Profile tab and confirm the picture appears there too
 
 Web:
-- use Members to add/edit/delete residents; Staff for response team CRUD; App logins to link mobile Auth
+- use Members or Users to add resident mobile logins by email; Staff for response team CRUD
 - open People page and check resident photos
 - open Reports page and check photo/audio preview
 - open Calls page and test hotline add/edit/delete

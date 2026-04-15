@@ -29,6 +29,9 @@ create unique index if not exists profiles_user_id_unique
 alter table public.profiles
   add column if not exists must_change_password boolean not null default false;
 
+alter table public.profiles
+  add column if not exists must_complete_profile boolean not null default false;
+
 create table if not exists public.incident_reports (
   id uuid primary key default gen_random_uuid(),
   profile_id uuid references public.profiles(id) on delete set null,
@@ -103,6 +106,35 @@ create unique index if not exists staff_members_profile_id_unique
   on public.staff_members (profile_id)
   where profile_id is not null;
 
+-- Dashboard operators (CDRRMO): superadmin manages this table; admin has full ops except adding admins.
+create table if not exists public.app_admins (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  role text not null default 'admin' check (role in ('superadmin', 'admin')),
+  created_at timestamptz not null default now()
+);
+
+alter table public.app_admins
+  add column if not exists must_change_password boolean not null default false;
+
+create or replace function public.app_admin_clear_must_change_password()
+returns void
+language plpgsql
+security definer
+set search_path to public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+  update public.app_admins
+  set must_change_password = false
+  where user_id = auth.uid();
+end;
+$$;
+
+revoke all on function public.app_admin_clear_must_change_password() from public;
+grant execute on function public.app_admin_clear_must_change_password() to authenticated;
+
 alter table public.incident_reports
   add column if not exists assigned_staff_id uuid references public.staff_members(id) on delete set null;
 
@@ -118,6 +150,7 @@ drop function if exists public.auto_assign_incident_report();
 create or replace function public.auto_assign_incident_report()
 returns trigger
 language plpgsql
+set search_path to public
 as $$
 declare
   pick uuid;
@@ -189,6 +222,137 @@ begin
   end if;
 end $$;
 
+create or replace function public.is_superadmin()
+returns boolean
+language sql
+stable
+security definer
+set search_path to public
+as $$
+  select exists (
+    select 1 from public.app_admins a
+    where a.user_id = auth.uid() and a.role = 'superadmin'
+  );
+$$;
+
+revoke all on function public.is_superadmin() from public;
+grant execute on function public.is_superadmin() to authenticated;
+
+create or replace function public.is_app_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path to public
+as $$
+  select exists (
+    select 1 from public.app_admins a where a.user_id = auth.uid()
+  );
+$$;
+
+revoke all on function public.is_app_admin() from public;
+grant execute on function public.is_app_admin() to authenticated;
+
+-- Mobile app: insert incident with server-resolved profile_id (avoids RLS 42501 from wrong client UUIDs).
+create or replace function public.submit_incident_report(
+  p_hazard_type text,
+  p_description text,
+  p_location_text text default null,
+  p_reporter_name text default null,
+  p_reporter_contact text default null,
+  p_evidence_url text default null,
+  p_audio_url text default null,
+  p_latitude double precision default null,
+  p_longitude double precision default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path to public
+as $$
+declare
+  v_uid uuid;
+  v_jwt_email text;
+  v_profile_id uuid;
+  new_id uuid;
+  v_staff_id uuid;
+  v_staff_name text;
+begin
+  v_uid := auth.uid();
+  if v_uid is null then
+    raise exception 'Not authenticated' using errcode = '28000';
+  end if;
+
+  if p_hazard_type is null or trim(p_hazard_type) = '' then
+    raise exception 'hazard_type required';
+  end if;
+  if p_description is null or trim(p_description) = '' then
+    raise exception 'description required';
+  end if;
+  if length(trim(p_description)) > 20000 then
+    raise exception 'description too long';
+  end if;
+
+  v_jwt_email := lower(trim(both from coalesce(auth.jwt() ->> 'email', '')));
+
+  select p.id into v_profile_id
+  from public.profiles p
+  where p.user_id = v_uid
+     or (
+       p.user_id is null
+       and v_jwt_email <> ''
+       and lower(trim(both from coalesce(p.email, ''))) = v_jwt_email
+     )
+  order by case when p.user_id = v_uid then 0 else 1 end
+  limit 1;
+
+  insert into public.incident_reports (
+    profile_id,
+    reporter_name,
+    reporter_contact,
+    hazard_type,
+    location_text,
+    description,
+    evidence_url,
+    audio_url,
+    latitude,
+    longitude,
+    status
+  ) values (
+    v_profile_id,
+    nullif(trim(both from coalesce(p_reporter_name, '')), ''),
+    nullif(trim(both from coalesce(p_reporter_contact, '')), ''),
+    trim(p_hazard_type),
+    nullif(trim(both from coalesce(p_location_text, '')), ''),
+    trim(p_description),
+    nullif(trim(both from coalesce(p_evidence_url, '')), ''),
+    nullif(trim(both from coalesce(p_audio_url, '')), ''),
+    p_latitude,
+    p_longitude,
+    'submitted'
+  )
+  returning id, assigned_staff_id into new_id, v_staff_id;
+
+  if v_staff_id is not null then
+    select sm.full_name into v_staff_name
+    from public.staff_members sm
+    where sm.id = v_staff_id;
+  end if;
+
+  return jsonb_build_object(
+    'id', new_id,
+    'assigned_staff_name', coalesce(v_staff_name, '')
+  );
+end;
+$$;
+
+revoke all on function public.submit_incident_report(
+  text, text, text, text, text, text, text, double precision, double precision
+) from public;
+grant execute on function public.submit_incident_report(
+  text, text, text, text, text, text, text, double precision, double precision
+) to authenticated;
+
 alter table public.profiles enable row level security;
 alter table public.incident_reports enable row level security;
 alter table public.hotlines enable row level security;
@@ -196,105 +360,372 @@ alter table public.evacuation_centers enable row level security;
 alter table public.household_readiness enable row level security;
 alter table public.advisories enable row level security;
 alter table public.staff_members enable row level security;
+alter table public.app_admins enable row level security;
 
--- Prototype-only policies for open access via anon key.
+-- RLS: residents scoped to their profile; CDRRMO operators in public.app_admins see/manage all.
+-- Bootstrap (SQL Editor): insert into public.app_admins (user_id, role) values ('<uuid>', 'superadmin');
+grant select, insert, update, delete on table public.app_admins to authenticated;
+
+drop policy if exists "app_admins_select" on public.app_admins;
+drop policy if exists "app_admins_admin_insert" on public.app_admins;
+drop policy if exists "app_admins_admin_delete" on public.app_admins;
+drop policy if exists "app_admins_super_insert" on public.app_admins;
+drop policy if exists "app_admins_super_update" on public.app_admins;
+drop policy if exists "app_admins_super_delete" on public.app_admins;
+
+create policy "app_admins_select" on public.app_admins
+for select to authenticated using (
+  user_id = (select auth.uid())
+  or public.is_superadmin()
+);
+
+create policy "app_admins_super_insert" on public.app_admins
+for insert to authenticated with check (public.is_superadmin());
+
+create policy "app_admins_super_update" on public.app_admins
+for update to authenticated using (public.is_superadmin()) with check (public.is_superadmin());
+
+create policy "app_admins_super_delete" on public.app_admins
+for delete to authenticated using (public.is_superadmin());
+
+create or replace function public.app_admins_guard_last_superadmin()
+returns trigger
+language plpgsql
+set search_path to public
+as $$
+declare
+  others int;
+begin
+  if tg_op = 'DELETE' then
+    if old.role = 'superadmin' then
+      select count(*) into others
+      from public.app_admins
+      where role = 'superadmin' and user_id <> old.user_id;
+      if others < 1 then
+        raise exception 'Cannot remove the last superadmin.';
+      end if;
+    end if;
+    return old;
+  elsif tg_op = 'UPDATE' then
+    if old.role = 'superadmin' and new.role = 'admin' then
+      select count(*) into others
+      from public.app_admins
+      where role = 'superadmin' and user_id <> old.user_id;
+      if others < 1 then
+        raise exception 'Cannot demote the last superadmin.';
+      end if;
+    end if;
+    return new;
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_app_admins_guard_super on public.app_admins;
+create trigger trg_app_admins_guard_super
+before update or delete on public.app_admins
+for each row
+execute procedure public.app_admins_guard_last_superadmin();
+
+create or replace function public.superadmin_list_app_admins()
+returns table (user_id uuid, email text, role text, created_at timestamptz)
+language sql
+stable
+security definer
+set search_path to public
+as $$
+  select a.user_id, u.email::text, a.role, a.created_at
+  from public.app_admins a
+  join auth.users u on u.id = a.user_id
+  where public.is_superadmin();
+$$;
+
+revoke all on function public.superadmin_list_app_admins() from public;
+grant execute on function public.superadmin_list_app_admins() to authenticated;
+
+drop function if exists public.superadmin_add_admin_by_email(text, text);
+
+create or replace function public.superadmin_add_admin_by_email(
+  p_email text,
+  p_role text default 'admin',
+  p_must_change_password boolean default false
+)
+returns uuid
+language plpgsql
+security definer
+set search_path to public
+as $$
+declare
+  uid uuid;
+  norm text;
+begin
+  if not public.is_superadmin() then
+    raise exception 'Forbidden';
+  end if;
+  if p_role is null or p_role not in ('superadmin', 'admin') then
+    raise exception 'Invalid role';
+  end if;
+
+  norm := lower(trim(both from p_email));
+
+  select au.id into uid
+  from auth.users au
+  where lower(trim(both from coalesce(au.email::text, ''))) = norm
+     or lower(trim(both from coalesce(au.raw_user_meta_data->>'email', ''))) = norm;
+
+  if uid is null then
+    raise exception
+      using message = 'No Auth user with that email. In Supabase: Authentication → Users → Invite or Add user, then try again.';
+  end if;
+
+  perform set_config('row_security', 'off', true);
+  insert into public.app_admins (user_id, role, must_change_password)
+  values (uid, p_role, p_must_change_password)
+  on conflict (user_id) do update set
+    role = excluded.role,
+    must_change_password = case
+      when p_must_change_password then true
+      else public.app_admins.must_change_password
+    end;
+  return uid;
+end;
+$$;
+
+revoke all on function public.superadmin_add_admin_by_email(text, text, boolean) from public;
+grant execute on function public.superadmin_add_admin_by_email(text, text, boolean) to authenticated;
+
+create or replace function public.superadmin_remove_admin(p_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path to public
+as $$
+begin
+  if not public.is_superadmin() then
+    raise exception 'Forbidden';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'You cannot remove your own dashboard access.';
+  end if;
+  perform set_config('row_security', 'off', true);
+  delete from public.app_admins where user_id = p_user_id;
+end;
+$$;
+
+revoke all on function public.superadmin_remove_admin(uuid) from public;
+grant execute on function public.superadmin_remove_admin(uuid) to authenticated;
+
 drop policy if exists "profiles_open_access" on public.profiles;
-create policy "profiles_open_access" on public.profiles
-for all
-to anon
-using (true)
-with check (true);
+drop policy if exists "profiles_authenticated_all" on public.profiles;
+drop policy if exists "profiles_auth_select" on public.profiles;
+drop policy if exists "profiles_auth_insert" on public.profiles;
+drop policy if exists "profiles_auth_update" on public.profiles;
+drop policy if exists "profiles_auth_delete" on public.profiles;
+create policy "profiles_auth_select" on public.profiles
+for select to authenticated using (
+  public.is_app_admin()
+  or user_id = (select auth.uid())
+  or (
+    user_id is null
+    and lower(trim(both from coalesce(email, ''))) =
+      lower(trim(both from coalesce((select auth.jwt()) ->> 'email', '')))
+  )
+);
+create policy "profiles_auth_insert" on public.profiles
+for insert to authenticated with check (
+  public.is_app_admin()
+  or (
+    (select auth.uid()) is not null
+    and (user_id is null or user_id = (select auth.uid()))
+  )
+);
+create policy "profiles_auth_update" on public.profiles
+for update to authenticated using (
+  public.is_app_admin()
+  or user_id = (select auth.uid())
+  or (
+    user_id is null
+    and lower(trim(both from coalesce(email, ''))) =
+      lower(trim(both from coalesce((select auth.jwt()) ->> 'email', '')))
+  )
+) with check (
+  public.is_app_admin()
+  or user_id = (select auth.uid())
+);
+create policy "profiles_auth_delete" on public.profiles
+for delete to authenticated using (public.is_app_admin());
 
 drop policy if exists "incident_reports_open_access" on public.incident_reports;
-create policy "incident_reports_open_access" on public.incident_reports
-for all
-to anon
-using (true)
-with check (true);
+drop policy if exists "incident_reports_authenticated_all" on public.incident_reports;
+drop policy if exists "incident_reports_anon_insert" on public.incident_reports;
+drop policy if exists "incident_reports_auth_select" on public.incident_reports;
+drop policy if exists "incident_reports_auth_insert" on public.incident_reports;
+drop policy if exists "incident_reports_auth_update" on public.incident_reports;
+drop policy if exists "incident_reports_auth_delete" on public.incident_reports;
+create policy "incident_reports_anon_insert" on public.incident_reports
+for insert to anon with check (
+  hazard_type is not null
+  and trim(description) <> ''
+  and length(description) <= 20000
+);
+create policy "incident_reports_auth_select" on public.incident_reports
+for select to authenticated using (
+  public.is_app_admin()
+  or profile_id in (
+    select p.id
+    from public.profiles p
+    where p.user_id = (select auth.uid())
+      or (
+        p.user_id is null
+        and lower(trim(both from coalesce(p.email, ''))) =
+          lower(trim(both from coalesce((select auth.jwt()) ->> 'email', '')))
+      )
+  )
+  or assigned_staff_id in (
+    select sm.id
+    from public.staff_members sm
+    join public.profiles p on p.id = sm.profile_id
+    where p.user_id = (select auth.uid())
+  )
+);
+create policy "incident_reports_auth_insert" on public.incident_reports
+for insert to authenticated with check (
+  (select auth.uid()) is not null
+  and (
+    profile_id is null
+    or profile_id in (
+      select p.id
+      from public.profiles p
+      where p.user_id = (select auth.uid())
+        or (
+          p.user_id is null
+          and lower(trim(both from coalesce(p.email, ''))) =
+            lower(trim(both from coalesce((select auth.jwt()) ->> 'email', '')))
+        )
+    )
+  )
+);
+create policy "incident_reports_auth_update" on public.incident_reports
+for update to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+create policy "incident_reports_auth_delete" on public.incident_reports
+for delete to authenticated using (public.is_app_admin());
 
 drop policy if exists "hotlines_read_access" on public.hotlines;
 drop policy if exists "hotlines_open_access" on public.hotlines;
-create policy "hotlines_open_access" on public.hotlines
-for all
-to anon
-using (true)
-with check (true);
+drop policy if exists "hotlines_authenticated_all" on public.hotlines;
+drop policy if exists "hotlines_anon_select" on public.hotlines;
+drop policy if exists "hotlines_auth_select" on public.hotlines;
+drop policy if exists "hotlines_auth_insert" on public.hotlines;
+drop policy if exists "hotlines_auth_update" on public.hotlines;
+drop policy if exists "hotlines_auth_delete" on public.hotlines;
+create policy "hotlines_anon_select" on public.hotlines
+for select to anon using (true);
+create policy "hotlines_auth_select" on public.hotlines
+for select to authenticated using (true);
+create policy "hotlines_auth_insert" on public.hotlines
+for insert to authenticated with check (public.is_app_admin());
+create policy "hotlines_auth_update" on public.hotlines
+for update to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+create policy "hotlines_auth_delete" on public.hotlines
+for delete to authenticated using (public.is_app_admin());
 
 drop policy if exists "evacuation_centers_read_access" on public.evacuation_centers;
+drop policy if exists "evacuation_centers_authenticated_select" on public.evacuation_centers;
 create policy "evacuation_centers_read_access" on public.evacuation_centers
-for select
-to anon
-using (true);
+for select to anon using (true);
+create policy "evacuation_centers_authenticated_select" on public.evacuation_centers
+for select to authenticated using (true);
 
 drop policy if exists "household_readiness_open_access" on public.household_readiness;
-create policy "household_readiness_open_access" on public.household_readiness
-for all
-to anon
-using (true)
-with check (true);
+drop policy if exists "household_readiness_authenticated_all" on public.household_readiness;
+drop policy if exists "household_readiness_auth_select" on public.household_readiness;
+drop policy if exists "household_readiness_auth_insert" on public.household_readiness;
+drop policy if exists "household_readiness_auth_update" on public.household_readiness;
+drop policy if exists "household_readiness_auth_delete" on public.household_readiness;
+create policy "household_readiness_auth_select" on public.household_readiness
+for select to authenticated using (
+  public.is_app_admin()
+  or profile_id in (select id from public.profiles where user_id = (select auth.uid()))
+);
+create policy "household_readiness_auth_insert" on public.household_readiness
+for insert to authenticated with check (
+  public.is_app_admin()
+  or profile_id is null
+  or profile_id in (select id from public.profiles where user_id = (select auth.uid()))
+);
+create policy "household_readiness_auth_update" on public.household_readiness
+for update to authenticated using (
+  public.is_app_admin()
+  or profile_id in (select id from public.profiles where user_id = (select auth.uid()))
+) with check (
+  public.is_app_admin()
+  or profile_id in (select id from public.profiles where user_id = (select auth.uid()))
+);
+create policy "household_readiness_auth_delete" on public.household_readiness
+for delete to authenticated using (
+  public.is_app_admin()
+  or profile_id in (select id from public.profiles where user_id = (select auth.uid()))
+);
 
 drop policy if exists "advisories_open_access" on public.advisories;
-create policy "advisories_open_access" on public.advisories
-for all
-to anon
-using (true)
-with check (true);
+drop policy if exists "advisories_authenticated_all" on public.advisories;
+drop policy if exists "advisories_anon_select" on public.advisories;
+drop policy if exists "advisories_auth_select" on public.advisories;
+drop policy if exists "advisories_auth_insert" on public.advisories;
+drop policy if exists "advisories_auth_update" on public.advisories;
+drop policy if exists "advisories_auth_delete" on public.advisories;
+create policy "advisories_anon_select" on public.advisories
+for select to anon using (true);
+create policy "advisories_auth_select" on public.advisories
+for select to authenticated using (true);
+create policy "advisories_auth_insert" on public.advisories
+for insert to authenticated with check (public.is_app_admin());
+create policy "advisories_auth_update" on public.advisories
+for update to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+create policy "advisories_auth_delete" on public.advisories
+for delete to authenticated using (public.is_app_admin());
 
 drop policy if exists "staff_members_open_access" on public.staff_members;
-create policy "staff_members_open_access" on public.staff_members
-for all
-to anon
-using (true)
-with check (true);
-
--- Logged-in mobile clients use the authenticated role; mirror open policies for development.
-drop policy if exists "profiles_authenticated_all" on public.profiles;
-create policy "profiles_authenticated_all" on public.profiles
-for all
-to authenticated
-using (true)
-with check (true);
-
-drop policy if exists "incident_reports_authenticated_all" on public.incident_reports;
-create policy "incident_reports_authenticated_all" on public.incident_reports
-for all
-to authenticated
-using (true)
-with check (true);
-
-drop policy if exists "hotlines_authenticated_all" on public.hotlines;
-create policy "hotlines_authenticated_all" on public.hotlines
-for all
-to authenticated
-using (true)
-with check (true);
-
-drop policy if exists "evacuation_centers_authenticated_select" on public.evacuation_centers;
-create policy "evacuation_centers_authenticated_select" on public.evacuation_centers
-for select
-to authenticated
-using (true);
-
-drop policy if exists "household_readiness_authenticated_all" on public.household_readiness;
-create policy "household_readiness_authenticated_all" on public.household_readiness
-for all
-to authenticated
-using (true)
-with check (true);
-
-drop policy if exists "advisories_authenticated_all" on public.advisories;
-create policy "advisories_authenticated_all" on public.advisories
-for all
-to authenticated
-using (true)
-with check (true);
-
 drop policy if exists "staff_members_authenticated_all" on public.staff_members;
-create policy "staff_members_authenticated_all" on public.staff_members
-for all
+drop policy if exists "staff_members_anon_select" on public.staff_members;
+drop policy if exists "staff_members_auth_select" on public.staff_members;
+drop policy if exists "staff_members_auth_insert" on public.staff_members;
+drop policy if exists "staff_members_auth_update" on public.staff_members;
+drop policy if exists "staff_members_auth_delete" on public.staff_members;
+create policy "staff_members_anon_select" on public.staff_members
+for select to anon using (true);
+create policy "staff_members_auth_select" on public.staff_members
+for select to authenticated using (true);
+create policy "staff_members_auth_insert" on public.staff_members
+for insert to authenticated with check (public.is_app_admin());
+create policy "staff_members_auth_update" on public.staff_members
+for update to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+create policy "staff_members_auth_delete" on public.staff_members
+for delete to authenticated using (public.is_app_admin());
+
+-- Storage: incident-evidence (report photos/audio). Bucket + policies for mobile uploads.
+insert into storage.buckets (id, name, public)
+values ('incident-evidence', 'incident-evidence', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "incident_evidence_select" on storage.objects;
+drop policy if exists "incident_evidence_insert_authenticated" on storage.objects;
+drop policy if exists "incident_evidence_insert_anon" on storage.objects;
+
+create policy "incident_evidence_select"
+on storage.objects for select
+to anon, authenticated
+using (bucket_id = 'incident-evidence');
+
+create policy "incident_evidence_insert_authenticated"
+on storage.objects for insert
 to authenticated
-using (true)
-with check (true);
+with check (bucket_id = 'incident-evidence');
+
+create policy "incident_evidence_insert_anon"
+on storage.objects for insert
+to anon
+with check (bucket_id = 'incident-evidence');
 
 -- PostgREST uses anon / authenticated; without GRANTs, queries return 42501 even with RLS policies.
 grant usage on schema public to anon, authenticated;
@@ -305,6 +736,7 @@ grant select, insert, update, delete on table public.evacuation_centers to anon,
 grant select, insert, update, delete on table public.household_readiness to anon, authenticated;
 grant select, insert, update, delete on table public.advisories to anon, authenticated;
 grant select, insert, update, delete on table public.staff_members to anon, authenticated;
+-- app_admins: select granted above with RLS; first row must be inserted via Dashboard SQL (service role bypasses RLS).
 
 -- Seed sample data for development/demo.
 -- This section keeps exactly five rows per table with deterministic IDs.
