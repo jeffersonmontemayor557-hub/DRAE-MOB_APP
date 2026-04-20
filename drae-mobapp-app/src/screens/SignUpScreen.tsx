@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import {
   Alert,
   Image,
@@ -13,9 +13,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
+import { allowSelfSignup } from '../config/allowSelfSignup';
 import { useAppData } from '../context/AppDataContext';
 import { isSupabaseConfigured, supabaseConfigError } from '../lib/supabase';
 import {
+  checkMobileSignupEligible,
   formatSignUpErrorMessage,
   signOutAuth,
   signUpWithEmailPassword,
@@ -29,6 +31,11 @@ const MIN_PASSWORD = 6;
 
 export default function SignUpScreen({ navigation }: Props) {
   const { refreshFromRemote } = useAppData();
+  useLayoutEffect(() => {
+    if (!allowSelfSignup) {
+      navigation.replace('Start');
+    }
+  }, [navigation]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -57,6 +64,15 @@ export default function SignUpScreen({ navigation }: Props) {
 
     setBusy(true);
     try {
+      const eligible = await checkMobileSignupEligible(trimmed);
+      if (!eligible) {
+        Alert.alert(
+          'Not eligible to register',
+          'Only residents whose email is already on file with CDRRMO can create an account here. Visit the office or contact staff to be added to the system first.',
+        );
+        return;
+      }
+
       const { needsEmailConfirmation } = await signUpWithEmailPassword(trimmed, password);
 
       if (needsEmailConfirmation) {

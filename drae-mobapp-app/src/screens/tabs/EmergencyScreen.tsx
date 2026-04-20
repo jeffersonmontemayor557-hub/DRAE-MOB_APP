@@ -20,11 +20,12 @@ import { RootStackParamList } from '../../../App';
 import { AppleRefreshControl } from '../../components/AppleRefreshControl';
 import { ReadinessScoreWidget } from '../../components/ReadinessScoreWidget';
 import {
+  emergencyHotlinePoster,
   type EmergencyDialEntry,
   getEmergencyDialList,
 } from '../../data/disasterContent';
 import { useAppData } from '../../context/AppDataContext';
-import { fetchHotlines } from '../../services/supabaseService';
+import { fetchHotlinePosterConfig, fetchHotlines } from '../../services/supabaseService';
 import { digitsForPhilippineDialOrSms } from '../../utils/phoneFormat';
 import { apple } from '../../theme/apple';
 import { colors } from '../../theme/colors';
@@ -80,11 +81,12 @@ export default function EmergencyScreen() {
   const { profile, readiness } = useAppData();
   const [hotlineModalOpen, setHotlineModalOpen] = useState(false);
   const [dialList, setDialList] = useState<EmergencyDialEntry[]>(() =>
-    getEmergencyDialList(),
+    getEmergencyDialList(emergencyHotlinePoster),
   );
   const [refreshing, setRefreshing] = useState(false);
   const loadDialList = useCallback(async () => {
-    const base = getEmergencyDialList();
+    const poster = (await fetchHotlinePosterConfig()) ?? emergencyHotlinePoster;
+    const base = getEmergencyDialList(poster);
     try {
       const remote = await fetchHotlines();
       if (!remote.length) {

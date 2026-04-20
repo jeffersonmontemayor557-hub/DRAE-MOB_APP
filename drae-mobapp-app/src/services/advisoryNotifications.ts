@@ -68,6 +68,13 @@ export async function initializeAdvisoryNotifications() {
       lightColor: '#1a7a4a',
       sound: 'default',
     });
+    await Notifications.setNotificationChannelAsync('report-updates', {
+      name: 'Your Report Updates',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 150, 250],
+      lightColor: '#1a7a4a',
+      sound: 'default',
+    });
   }
 
   hasInitialized = true;
@@ -112,6 +119,54 @@ export async function notifyNewStaffAssignment(payload: StaffAssignmentNotifyPay
       sound: 'default',
       data: { type: 'staff_assignment' },
       ...(Platform.OS === 'android' ? { channelId: 'assignments' } : {}),
+    },
+    trigger: null,
+  });
+}
+
+export type ReportAssignedNotifyPayload = {
+  hazardType: string;
+  assignedStaffName: string;
+  reportId: string;
+};
+
+export async function notifyReportAssigned(payload: ReportAssignedNotifyPayload) {
+  if (!isNotificationSupported) {
+    return;
+  }
+  const Notifications = await getNotificationsModule();
+  const hazard = payload.hazardType?.trim() || 'Your incident report';
+  const who = payload.assignedStaffName?.trim() || 'a responder';
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Responder assigned',
+      body: `${who} is now handling your ${hazard.toLowerCase()} report.`,
+      sound: 'default',
+      data: { type: 'report_assigned', reportId: payload.reportId },
+      ...(Platform.OS === 'android' ? { channelId: 'report-updates' } : {}),
+    },
+    trigger: null,
+  });
+}
+
+export type ReportResolvedNotifyPayload = {
+  hazardType: string;
+  reportId: string;
+};
+
+export async function notifyReportResolved(payload: ReportResolvedNotifyPayload) {
+  if (!isNotificationSupported) {
+    return;
+  }
+  const Notifications = await getNotificationsModule();
+  const hazard = payload.hazardType?.trim() || 'Your incident report';
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Report resolved',
+      body: `Your ${hazard.toLowerCase()} report was marked resolved. Thank you for reporting.`,
+      sound: 'default',
+      data: { type: 'report_resolved', reportId: payload.reportId },
+      ...(Platform.OS === 'android' ? { channelId: 'report-updates' } : {}),
     },
     trigger: null,
   });

@@ -255,7 +255,7 @@ export default function IncidentReportScreen({ navigation, route }: Props) {
 
       const assignNote = outcome.result.assignedStaffName
         ? `\n\nAssigned responder: ${outcome.result.assignedStaffName}.`
-        : '';
+        : '\n\nYou are in queue. All CDRRMO responders are currently handling other emergencies — you will be notified the moment one is assigned to you.';
 
       Alert.alert(
         'Report Submitted',

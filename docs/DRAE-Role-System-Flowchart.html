@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DRAE Role Flowchart (User, Staff, Admin, Superadmin)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+      :root {
+        --ink: #1d2433;
+        --muted: #5d6677;
+        --paper: #ffffff;
+        --card: #ffffff;
+        --line: #1f385d;
+        --accent: #b4492c;
+        --accent-soft: #f3ddd4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Source Sans 3", sans-serif;
+        background: var(--paper);
+        color: var(--ink);
+      }
+
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+
+      header {
+        background: linear-gradient(140deg, #1f385d 0%, #2f4f78 60%, #385f90 100%);
+        color: #f7f1e7;
+        padding: 2.2rem 1.2rem 2.8rem;
+      }
+
+      header h1 {
+        margin: 0;
+        font-family: "DM Serif Display", serif;
+        font-size: clamp(1.6rem, 4vw, 2.4rem);
+        font-weight: 400;
+      }
+
+      header p {
+        margin: 0.55rem 0 0;
+        max-width: 68rem;
+        opacity: 0.95;
+      }
+
+      .wrap {
+        width: 210mm;
+        max-width: 100%;
+        min-height: 297mm;
+        margin: -1.6rem auto 2.5rem;
+        padding: 0 1rem;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid rgba(31, 56, 93, 0.14);
+        border-radius: 12px;
+        box-shadow: 0 14px 28px rgba(29, 36, 51, 0.07);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      h2 {
+        margin: 0 0 0.5rem;
+        font-size: 1.35rem;
+        font-family: "DM Serif Display", serif;
+        font-weight: 400;
+      }
+
+      .hint {
+        margin: 0 0 0.9rem;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .legend {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.65rem;
+      }
+
+      .pill {
+        border-radius: 999px;
+        padding: 0.38rem 0.8rem;
+        font-size: 0.9rem;
+        font-weight: 700;
+        display: inline-block;
+      }
+
+      .u {
+        background: #e5f6eb;
+        color: #12562f;
+      }
+
+      .s {
+        background: #e8f2ff;
+        color: #15457f;
+      }
+
+      .a {
+        background: #fff2dc;
+        color: #7a4a00;
+      }
+
+      .sa {
+        background: #f8e9ff;
+        color: #5a2583;
+      }
+
+      .sys {
+        background: #eceef3;
+        color: #3a4251;
+      }
+
+      .mermaid {
+        overflow-x: auto;
+        display: flex;
+        justify-content: center;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 0.8rem;
+      }
+
+      ul {
+        margin: 0.35rem 0 0 1.05rem;
+        padding: 0;
+      }
+
+      @media print {
+        body {
+          background: #ffffff;
+        }
+
+        .wrap {
+          margin: 0 auto;
+          padding: 0;
+          width: 190mm;
+          min-height: auto;
+        }
+
+        .card {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>DRAE System Function Flowchart</h1>
+      <p>
+        End-to-end role flow for the mobile app and admin web: Resident/User, Staff, Admin, and
+        Superadmin interactions with Authentication, Profiles, Incident Reports, Assignments,
+        Advisories, and RBAC.
+      </p>
+    </header>
+
+    <div class="wrap">
+      <section class="card">
+        <h2>Legend</h2>
+        <p class="hint">Role colors used in all diagrams.</p>
+        <div class="legend">
+          <span class="pill u">Resident / User (Mobile)</span>
+          <span class="pill s">Staff (Mobile + Assigned Reports)</span>
+          <span class="pill a">Admin (Web Dashboard)</span>
+          <span class="pill sa">Superadmin (Web RBAC)</span>
+          <span class="pill sys">System / Supabase</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Cross-Role System Flow</h2>
+        <p class="hint">
+          Main lifecycle: account provisioning, mandatory setup, reporting, assignment, response,
+          and admin governance.
+        </p>
+        <div class="mermaid">
+flowchart TD
+  U1[Resident opens mobile app]
+  A1[Admin creates user by email]
+  SA1[Superadmin manages admin accounts]
+  SY1[(Supabase Auth + Profiles + Staff + Reports + Advisories)]
+  U2{User has linked profile?}
+  U3[Route to Personal Information]
+  U4[Complete required profile fields]
+  U5[Save profile and clear must_complete_profile]
+  U6[Access Main Tabs]
+  U7[Submit incident report with media]
+  SY2[RPC submit_incident_report]
+  SY3[Auto assign staff by hazard/workload]
+  S1[Staff receives assignment notification]
+  S2[Staff opens Staff Assignments]
+  S3[Update report status: submitted / in_progress / resolved]
+  A2[Admin monitors reports dashboard]
+  A3[Admin manages residents, staff, advisories, hotlines]
+  SA2[Superadmin grants/revokes admin role]
+
+  A1 --> SY1
+  SA1 --> SA2 --> SY1
+  U1 --> U2
+  U2 -- no --> U3 --> U4 --> U5 --> SY1 --> U6
+  U2 -- yes --> U6
+  U6 --> U7 --> SY2 --> SY3 --> S1 --> S2 --> S3 --> SY1
+  A2 --> SY1
+  A3 --> SY1
+
+  classDef user fill:#e5f6eb,stroke:#12562f,color:#12562f,stroke-width:1px;
+  classDef staff fill:#e8f2ff,stroke:#15457f,color:#15457f,stroke-width:1px;
+  classDef admin fill:#fff2dc,stroke:#7a4a00,color:#7a4a00,stroke-width:1px;
+  classDef super fill:#f8e9ff,stroke:#5a2583,color:#5a2583,stroke-width:1px;
+  classDef sys fill:#eceef3,stroke:#3a4251,color:#3a4251,stroke-width:1px;
+
+  class U1,U2,U3,U4,U5,U6,U7 user;
+  class S1,S2,S3 staff;
+  class A1,A2,A3 admin;
+  class SA1,SA2 super;
+  class SY1,SY2,SY3 sys;
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Role Swimlane Flow</h2>
+        <p class="hint">Who does what in sequence across the same incident-response workflow.</p>
+        <div class="mermaid">
+flowchart LR
+  subgraph Resident_User
+    ULogin[Login / Sign up]
+    UGate[Session gate checks profile + flags]
+    UComplete[Complete Personal Information]
+    UReport[Create incident report]
+    UTrack[Track my reports]
+  end
+
+  subgraph Staff
+    SLogin[Login as staff-linked profile]
+    SQueue[Open staff assignment queue]
+    SAct[Take action + update status]
+  end
+
+  subgraph Admin
+    AMembers[Manage residents / users]
+    AStaff[Manage staff roster]
+    AOps[Manage advisories + hotlines]
+    AMonitor[Monitor reports + assignments]
+  end
+
+  subgraph Superadmin
+    SAAuth[Create admin auth account]
+    SARole[Grant role in app_admins]
+    SARevoke[Revoke admin access]
+  end
+
+  subgraph System
+    DB[(Supabase: auth.users, profiles, staff_members, incident_reports, app_admins)]
+  end
+
+  ULogin --> UGate --> UComplete --> DB
+  UComplete --> UReport --> DB --> UTrack
+  DB --> SLogin --> SQueue --> SAct --> DB
+  AMembers --> DB
+  AStaff --> DB
+  AOps --> DB
+  AMonitor --> DB
+  SAAuth --> SARole --> DB
+  SARevoke --> DB
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Functional Coverage by Role</h2>
+        <div class="grid">
+          <div>
+            <span class="pill u">Resident / User</span>
+            <ul>
+              <li>Sign up / login with email + password</li>
+              <li>Mandatory profile completion (when flagged)</li>
+              <li>View weather, advisories, guides, emergency hotlines</li>
+              <li>Submit incident report (text + photo/audio + location)</li>
+              <li>Offline queue retry and report history tracking</li>
+            </ul>
+          </div>
+          <div>
+            <span class="pill s">Staff</span>
+            <ul>
+              <li>Authenticated via profile linked to staff_members</li>
+              <li>Receive assignment updates</li>
+              <li>Open staff assignment list</li>
+              <li>Update report progress and final resolution</li>
+              <li>Refresh assignment stats in real time</li>
+            </ul>
+          </div>
+          <div>
+            <span class="pill a">Admin (Dashboard)</span>
+            <ul>
+              <li>Create/edit resident profiles and mobile logins</li>
+              <li>Create/edit staff and optional mobile login</li>
+              <li>Monitor reports and adjust assignment/status</li>
+              <li>Manage hotlines and advisories</li>
+              <li>Operational CRUD for key response data</li>
+            </ul>
+          </div>
+          <div>
+            <span class="pill sa">Superadmin</span>
+            <ul>
+              <li>Create admin authentication accounts</li>
+              <li>Grant admin or superadmin role</li>
+              <li>Enforce admin password change policy</li>
+              <li>Remove admin access</li>
+              <li>Own platform-level RBAC governance</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      mermaid.initialize({
+        startOnLoad: true,
+        securityLevel: "loose",
+        theme: "base",
+        themeVariables: {
+          primaryColor: "#ffffff",
+          primaryTextColor: "#1d2433",
+          primaryBorderColor: "#1f385d",
+          lineColor: "#2f4f78",
+          fontFamily: "Source Sans 3, sans-serif"
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -77,6 +77,26 @@ advisories verified flag (required for Weather / advisories fetch):
   alter table public.advisories
     add column if not exists is_verified boolean not null default true;
 
+mobile CREATE ACCOUNT (if you see: Could not find the function public.check_mobile_signup_eligible):
+  Run the full file drae-mobapp-app/supabase/migrations/20260420120000_check_mobile_signup_eligible.sql
+  in SQL Editor. It creates public.check_mobile_signup_eligible(p_email) and grants execute to anon.
+
+admin Hotlines poster + duplicate labels (Guides Emergency Hotlines + admin CRUD):
+  Run drae-mobapp-app/supabase/migrations/20260420160000_hotline_poster_config.sql
+  It creates public.hotline_poster_config (singleton JSON for the poster) and drops hotlines_label_unique
+  so multiple rows can share the same label on the quick dial list.
+
+incident dispatch queue + staff actions (one-open-per-staff, queue, staff Start / Resolve):
+  Run drae-mobapp-app/supabase/migrations/20260420200000_dispatch_queue_and_staff_actions.sql
+  It replaces auto_assign_incident_report (now only picks staff with zero open reports),
+  adds enforce_staff_one_open, dispatch_next_queued_report (auto-assigns the oldest queued
+  report when a staff becomes free), and staff RPCs:
+    - public.staff_start_assignment(p_report_id uuid)   -- submitted -> in_progress
+    - public.staff_resolve_assignment(p_report_id uuid) -- in_progress/submitted -> resolved
+  After applying: a resident whose report has no free responder stays unassigned (queued);
+  the mobile “My Reports” tab shows an “In queue” label and the resident is notified the moment
+  a staff is assigned, and again when the report is marked resolved.
+
 Confirm you are in the same Supabase project as drae-mobapp-app/.env (EXPO_PUBLIC_SUPABASE_URL).
 After SQL runs: Table Editor -> incident_reports -> you should see latitude and longitude columns.
 Wait a few seconds for the API schema cache, then tap Sync again on My Reports (or retry submit).

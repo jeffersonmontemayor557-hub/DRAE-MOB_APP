@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
+import { allowSelfSignup } from '../config/allowSelfSignup';
 import { useAppData } from '../context/AppDataContext';
 import { isSupabaseConfigured, supabaseConfigError } from '../lib/supabase';
 import {
@@ -133,13 +134,15 @@ export default function LoginScreen({ navigation }: Props) {
           <Text style={styles.buttonText}>{busy ? 'SIGNING IN…' : 'LOG IN'}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.linkRow}
-          onPress={() => navigation.navigate('SignUp')}
-          disabled={busy}
-        >
-          <Text style={styles.linkText}>New resident? Create an account</Text>
-        </TouchableOpacity>
+        {allowSelfSignup ? (
+          <TouchableOpacity
+            style={styles.linkRow}
+            onPress={() => navigation.navigate('SignUp')}
+            disabled={busy}
+          >
+            <Text style={styles.linkText}>New resident? Create an account</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </SafeAreaView>
   );

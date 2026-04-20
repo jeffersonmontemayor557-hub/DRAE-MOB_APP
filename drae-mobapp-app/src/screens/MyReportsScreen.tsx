@@ -373,6 +373,11 @@ export default function MyReportsScreen() {
                     ? ` • ${formatPhilippineMobileDisplay(item.assignedStaffPhone)}`
                     : ''}
                 </Text>
+              ) : item.status === 'submitted' ? (
+                <Text style={styles.queueLine}>
+                  In queue — all CDRRMO responders are handling other emergencies. You&apos;ll be
+                  notified as soon as one is assigned.
+                </Text>
               ) : null}
               <Text style={styles.description}>{item.description || '-'}</Text>
 
@@ -492,6 +497,12 @@ const styles = StyleSheet.create({
     color: colors.primaryDark,
     fontSize: 13,
     fontWeight: '700',
+  },
+  queueLine: {
+    color: '#B54708',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
   },
   description: {
     color: colors.text,

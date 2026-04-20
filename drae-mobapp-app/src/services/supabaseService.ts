@@ -2,6 +2,7 @@ import * as FileSystemLegacy from 'expo-file-system/legacy';
 import { persistPickedMediaUri } from '../utils/persistMediaUri';
 import { PersonalInfo } from '../types/profile';
 import { ReadinessState } from '../types/readiness';
+import { parseHotlinePosterConfig, type HotlinePosterConfig } from '../data/hotlinePosterConfig';
 import { isSupabaseConfigured, supabase, supabaseConfigError } from '../lib/supabase';
 
 export type Hotline = {
@@ -265,6 +266,20 @@ export function formatSignUpErrorMessage(err: unknown): string {
     return lines.join('\n');
   }
 
+  if (
+    lower.includes('could not find the function') &&
+    lower.includes('check_mobile_signup_eligible')
+  ) {
+    return [
+      'This Supabase project is missing the sign-up check function.',
+      '',
+      'Fix: Dashboard → SQL Editor → paste and run the SQL from:',
+      'drae-mobapp-app/supabase/migrations/20260420120000_check_mobile_signup_eligible.sql',
+      '',
+      'Then try sign up again (wait a few seconds for the API cache).',
+    ].join('\n');
+  }
+
   return lines.join('\n');
 }
 
@@ -277,6 +292,21 @@ export async function signInWithEmailPassword(email: string, password: string) {
   if (error) {
     throw error;
   }
+}
+
+/**
+ * Returns true when a resident profile row exists for this email with no linked Auth user
+ * (office / admin pre-registered). Blocks random public sign-ups before auth.signUp runs.
+ */
+export async function checkMobileSignupEligible(email: string): Promise<boolean> {
+  const client = requireSupabase();
+  const { data, error } = await client.rpc('check_mobile_signup_eligible', {
+    p_email: email.trim().toLowerCase(),
+  });
+  if (error) {
+    throw error;
+  }
+  return Boolean(data);
 }
 
 /** Creates the Auth user. When email confirmation is off, a session is returned immediately. */
@@ -890,6 +920,22 @@ export async function countStaffOpenAssignments(staffId: string): Promise<number
   return count ?? 0;
 }
 
+export async function startStaffAssignment(reportId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc('staff_start_assignment', { p_report_id: reportId });
+  if (error) {
+    throw error;
+  }
+}
+
+export async function resolveStaffAssignment(reportId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.rpc('staff_resolve_assignment', { p_report_id: reportId });
+  if (error) {
+    throw error;
+  }
+}
+
 function isOpenAssignmentStatus(status: string) {
   const s = status.toLowerCase();
   return s === 'submitted' || s === 'in_progress';
@@ -1033,6 +1079,27 @@ export async function fetchHotlines() {
     label: String(item.label),
     phone: String(item.phone),
   }));
+}
+
+/** Remote poster for Guides → Emergency Hotlines (null = use app default). */
+export async function fetchHotlinePosterConfig(): Promise<HotlinePosterConfig | null> {
+  if (!isSupabaseConfigured || !supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('hotline_poster_config')
+    .select('config')
+    .eq('id', 1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('fetchHotlinePosterConfig', error);
+    return null;
+  }
+
+  const raw = data?.config;
+  return parseHotlinePosterConfig(raw);
 }
 
 export async function fetchEvacuationCenters() {

@@ -2,6 +2,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../../App';
+import { allowSelfSignup } from '../config/allowSelfSignup';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Start'>;
@@ -26,12 +27,19 @@ export default function StartScreen({ navigation }: Props) {
           <Text style={styles.buttonText}>LOG IN</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={() => navigation.navigate('SignUp')}
-        >
-          <Text style={styles.secondaryButtonText}>CREATE ACCOUNT</Text>
-        </TouchableOpacity>
+        {allowSelfSignup ? (
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => navigation.navigate('SignUp')}
+          >
+            <Text style={styles.secondaryButtonText}>CREATE ACCOUNT</Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={styles.selfSignupOffText}>
+            New accounts are issued when you are registered with CDRRMO. Use Log in if you already
+            have credentials.
+          </Text>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -95,6 +103,15 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.primary,
     backgroundColor: 'transparent',
+  },
+  selfSignupOffText: {
+    marginTop: 8,
+    textAlign: 'center',
+    color: colors.primaryDark,
+    fontSize: 15,
+    lineHeight: 22,
+    maxWidth: 320,
+    opacity: 0.9,
   },
   secondaryButtonText: {
     color: colors.primaryDark,

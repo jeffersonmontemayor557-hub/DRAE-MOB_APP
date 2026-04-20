@@ -3,9 +3,12 @@ import type { PropsWithChildren } from 'react';
 type Props = PropsWithChildren<{
   title: string;
   onClose: () => void;
+  /** Wider panel for read-only profile / long text. */
+  size?: 'default' | 'wide';
 }>;
 
-export function AppModal({ title, onClose, children }: Props) {
+export function AppModal({ title, onClose, children, size = 'default' }: Props) {
+  const modalClass = size === 'wide' ? 'crud-modal crud-modal--wide' : 'crud-modal';
   return (
     <div
       className="crud-modal-backdrop"
@@ -18,7 +21,7 @@ export function AppModal({ title, onClose, children }: Props) {
         }
       }}
     >
-      <div className="crud-modal" onClick={(e) => e.stopPropagation()}>
+      <div className={modalClass} onClick={(e) => e.stopPropagation()}>
         <div className="crud-modal-header">
           <h3 id="crud-modal-title">{title}</h3>
           <button type="button" className="crud-modal-close" onClick={onClose} aria-label="Close">

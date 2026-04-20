@@ -56,6 +56,13 @@ create table if not exists public.hotlines (
   priority int not null default 100
 );
 
+create table if not exists public.hotline_poster_config (
+  id smallint primary key default 1,
+  constraint hotline_poster_config_singleton check (id = 1),
+  config jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.evacuation_centers (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -145,7 +152,11 @@ alter table public.incident_reports
   add column if not exists longitude double precision;
 
 drop trigger if exists trg_auto_assign_incident on public.incident_reports;
+drop trigger if exists trg_enforce_staff_one_open on public.incident_reports;
+drop trigger if exists trg_dispatch_next_queued_report on public.incident_reports;
 drop function if exists public.auto_assign_incident_report();
+drop function if exists public.enforce_staff_one_open();
+drop function if exists public.dispatch_next_queued_report();
 
 create or replace function public.auto_assign_incident_report()
 returns trigger
@@ -169,26 +180,24 @@ begin
       cardinality(sm.hazard_types) = 0
       or hazard = any (sm.hazard_types)
     )
-  order by (
-    select count(*)::bigint
-    from public.incident_reports ir
-    where ir.assigned_staff_id = sm.id
-      and ir.status in ('submitted', 'in_progress')
-  ) asc,
-  sm.full_name asc
+    and not exists (
+      select 1 from public.incident_reports ir
+      where ir.assigned_staff_id = sm.id
+        and ir.status in ('submitted', 'in_progress')
+    )
+  order by sm.full_name asc
   limit 1;
 
   if pick is null then
     select sm.id into pick
     from public.staff_members sm
     where sm.active = true
-    order by (
-      select count(*)::bigint
-      from public.incident_reports ir
-      where ir.assigned_staff_id = sm.id
-        and ir.status in ('submitted', 'in_progress')
-    ) asc,
-    sm.full_name asc
+      and not exists (
+        select 1 from public.incident_reports ir
+        where ir.assigned_staff_id = sm.id
+          and ir.status in ('submitted', 'in_progress')
+      )
+    order by sm.full_name asc
     limit 1;
   end if;
 
@@ -205,15 +214,193 @@ before insert on public.incident_reports
 for each row
 execute procedure public.auto_assign_incident_report();
 
-do $$
+create or replace function public.enforce_staff_one_open()
+returns trigger
+language plpgsql
+set search_path to public
+as $$
 begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'hotlines_label_unique'
-  ) then
-    alter table public.hotlines
-      add constraint hotlines_label_unique unique (label);
+  if new.assigned_staff_id is null then
+    return new;
+  end if;
+  if new.status not in ('submitted', 'in_progress') then
+    return new;
   end if;
 
+  if tg_op = 'UPDATE'
+     and new.assigned_staff_id is not distinct from old.assigned_staff_id
+     and coalesce(new.status, '') = coalesce(old.status, '') then
+    return new;
+  end if;
+
+  if exists (
+    select 1 from public.incident_reports ir
+    where ir.assigned_staff_id = new.assigned_staff_id
+      and ir.status in ('submitted', 'in_progress')
+      and ir.id <> new.id
+  ) then
+    raise exception 'Staff already has an open assignment. Resolve or unassign first.'
+      using errcode = 'check_violation';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_enforce_staff_one_open
+before insert or update on public.incident_reports
+for each row
+execute procedure public.enforce_staff_one_open();
+
+create or replace function public.dispatch_next_queued_report()
+returns trigger
+language plpgsql
+set search_path to public
+as $$
+declare
+  freed_staff uuid;
+  next_report uuid;
+begin
+  freed_staff := null;
+
+  if tg_op = 'UPDATE'
+     and new.assigned_staff_id is not null
+     and coalesce(old.status, '') <> 'resolved'
+     and new.status = 'resolved' then
+    freed_staff := new.assigned_staff_id;
+  end if;
+
+  if tg_op = 'UPDATE'
+     and old.assigned_staff_id is not null
+     and new.assigned_staff_id is null
+     and coalesce(new.status, '') <> 'resolved' then
+    freed_staff := old.assigned_staff_id;
+  end if;
+
+  if freed_staff is null then
+    return new;
+  end if;
+
+  if exists (
+    select 1 from public.incident_reports ir
+    where ir.assigned_staff_id = freed_staff
+      and ir.status in ('submitted', 'in_progress')
+  ) then
+    return new;
+  end if;
+
+  select ir.id into next_report
+  from public.incident_reports ir
+  join public.staff_members sm on sm.id = freed_staff
+  where ir.assigned_staff_id is null
+    and ir.status = 'submitted'
+    and (cardinality(sm.hazard_types) = 0 or coalesce(ir.hazard_type, '') = any (sm.hazard_types))
+  order by ir.created_at asc
+  limit 1;
+
+  if next_report is null then
+    select ir.id into next_report
+    from public.incident_reports ir
+    where ir.assigned_staff_id is null
+      and ir.status = 'submitted'
+    order by ir.created_at asc
+    limit 1;
+  end if;
+
+  if next_report is not null then
+    update public.incident_reports
+    set assigned_staff_id = freed_staff
+    where id = next_report
+      and assigned_staff_id is null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger trg_dispatch_next_queued_report
+after update on public.incident_reports
+for each row
+execute procedure public.dispatch_next_queued_report();
+
+create or replace function public.staff_start_assignment(p_report_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path to public
+as $$
+declare
+  v_staff_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated' using errcode = '28000';
+  end if;
+
+  select sm.id into v_staff_id
+  from public.staff_members sm
+  join public.profiles p on p.id = sm.profile_id
+  where p.user_id = auth.uid()
+    and sm.active = true;
+
+  if v_staff_id is null then
+    raise exception 'You are not linked to an active staff record';
+  end if;
+
+  update public.incident_reports
+  set status = 'in_progress'
+  where id = p_report_id
+    and assigned_staff_id = v_staff_id
+    and status = 'submitted';
+
+  if not found then
+    raise exception 'Cannot start: report not assigned to you or already started';
+  end if;
+end;
+$$;
+
+revoke all on function public.staff_start_assignment(uuid) from public;
+grant execute on function public.staff_start_assignment(uuid) to authenticated;
+
+create or replace function public.staff_resolve_assignment(p_report_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path to public
+as $$
+declare
+  v_staff_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated' using errcode = '28000';
+  end if;
+
+  select sm.id into v_staff_id
+  from public.staff_members sm
+  join public.profiles p on p.id = sm.profile_id
+  where p.user_id = auth.uid()
+    and sm.active = true;
+
+  if v_staff_id is null then
+    raise exception 'You are not linked to an active staff record';
+  end if;
+
+  update public.incident_reports
+  set status = 'resolved'
+  where id = p_report_id
+    and assigned_staff_id = v_staff_id
+    and status in ('submitted', 'in_progress');
+
+  if not found then
+    raise exception 'Cannot resolve: report not assigned to you or already resolved';
+  end if;
+end;
+$$;
+
+revoke all on function public.staff_resolve_assignment(uuid) from public;
+grant execute on function public.staff_resolve_assignment(uuid) to authenticated;
+
+do $$
+begin
   if not exists (
     select 1 from pg_constraint where conname = 'evacuation_centers_name_unique'
   ) then
@@ -356,6 +543,7 @@ grant execute on function public.submit_incident_report(
 alter table public.profiles enable row level security;
 alter table public.incident_reports enable row level security;
 alter table public.hotlines enable row level security;
+alter table public.hotline_poster_config enable row level security;
 alter table public.evacuation_centers enable row level security;
 alter table public.household_readiness enable row level security;
 alter table public.advisories enable row level security;
@@ -515,6 +703,27 @@ $$;
 revoke all on function public.superadmin_remove_admin(uuid) from public;
 grant execute on function public.superadmin_remove_admin(uuid) to authenticated;
 
+create or replace function public.check_mobile_signup_eligible(p_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    where lower(trim(coalesce(p.email, ''))) = lower(trim(coalesce(p_email, '')))
+      and p.user_id is null
+  );
+$$;
+
+comment on function public.check_mobile_signup_eligible(text) is
+  'Returns true if profiles has this email and no user_id yet (eligible for mobile sign-up link).';
+
+revoke all on function public.check_mobile_signup_eligible(text) from public;
+grant execute on function public.check_mobile_signup_eligible(text) to anon, authenticated;
+
 drop policy if exists "profiles_open_access" on public.profiles;
 drop policy if exists "profiles_authenticated_all" on public.profiles;
 drop policy if exists "profiles_auth_select" on public.profiles;
@@ -629,6 +838,22 @@ for update to authenticated using (public.is_app_admin()) with check (public.is_
 create policy "hotlines_auth_delete" on public.hotlines
 for delete to authenticated using (public.is_app_admin());
 
+drop policy if exists "hotline_poster_config_anon_select" on public.hotline_poster_config;
+drop policy if exists "hotline_poster_config_auth_select" on public.hotline_poster_config;
+drop policy if exists "hotline_poster_config_admin_insert" on public.hotline_poster_config;
+drop policy if exists "hotline_poster_config_admin_update" on public.hotline_poster_config;
+drop policy if exists "hotline_poster_config_admin_delete" on public.hotline_poster_config;
+create policy "hotline_poster_config_anon_select" on public.hotline_poster_config
+for select to anon using (true);
+create policy "hotline_poster_config_auth_select" on public.hotline_poster_config
+for select to authenticated using (true);
+create policy "hotline_poster_config_admin_insert" on public.hotline_poster_config
+for insert to authenticated with check (public.is_app_admin());
+create policy "hotline_poster_config_admin_update" on public.hotline_poster_config
+for update to authenticated using (public.is_app_admin()) with check (public.is_app_admin());
+create policy "hotline_poster_config_admin_delete" on public.hotline_poster_config
+for delete to authenticated using (public.is_app_admin());
+
 drop policy if exists "evacuation_centers_read_access" on public.evacuation_centers;
 drop policy if exists "evacuation_centers_authenticated_select" on public.evacuation_centers;
 create policy "evacuation_centers_read_access" on public.evacuation_centers
@@ -732,6 +957,7 @@ grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on table public.profiles to anon, authenticated;
 grant select, insert, update, delete on table public.incident_reports to anon, authenticated;
 grant select, insert, update, delete on table public.hotlines to anon, authenticated;
+grant select, insert, update, delete on table public.hotline_poster_config to anon, authenticated;
 grant select, insert, update, delete on table public.evacuation_centers to anon, authenticated;
 grant select, insert, update, delete on table public.household_readiness to anon, authenticated;
 grant select, insert, update, delete on table public.advisories to anon, authenticated;
@@ -877,14 +1103,15 @@ on conflict (id) do update set
   status = excluded.status,
   created_at = excluded.created_at;
 
-insert into public.hotlines (label, phone, priority)
+insert into public.hotlines (id, label, phone, priority)
 values
-  ('CDRRMO', '0464810555', 1),
-  ('Police (PNP)', '0464160254', 2),
-  ('Fire (BFP)', '0464160254', 3),
-  ('Ambulance', '09985665555', 4),
-  ('Rescue 300 Base Radio', '0464814400', 5)
-on conflict (label) do update set
+  ('c1111111-1111-1111-1111-111111111111', 'CDRRMO', '0464810555', 1),
+  ('c2222222-2222-2222-2222-222222222222', 'Police (PNP)', '0464160254', 2),
+  ('c3333333-3333-3333-3333-333333333333', 'Fire (BFP)', '0464160254', 3),
+  ('c4444444-4444-4444-4444-444444444444', 'Ambulance', '09985665555', 4),
+  ('c5555555-5555-5555-5555-555555555555', 'Rescue 300 Base Radio', '0464814400', 5)
+on conflict (id) do update set
+  label = excluded.label,
   phone = excluded.phone,
   priority = excluded.priority;
 

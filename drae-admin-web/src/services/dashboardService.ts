@@ -1,4 +1,9 @@
 import { createEphemeralAuthClient, isSupabaseConfigured, supabase } from '../lib/supabase';
+import {
+  defaultHotlinePoster,
+  parseHotlinePosterConfig,
+  type HotlinePosterConfig,
+} from '../lib/hotlinePosterConfig';
 import type {
   Advisory,
   DashboardStats,
@@ -590,6 +595,52 @@ export async function deleteHotline(id: string) {
   }
 
   const { error } = await supabase.from('hotlines').delete().eq('id', id);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function getHotlinePosterConfig(): Promise<HotlinePosterConfig> {
+  if (!isSupabaseConfigured || !supabase) {
+    return defaultHotlinePoster;
+  }
+
+  const { data, error } = await supabase
+    .from('hotline_poster_config')
+    .select('config')
+    .eq('id', 1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('getHotlinePosterConfig', error);
+    return defaultHotlinePoster;
+  }
+
+  return parseHotlinePosterConfig(data?.config) ?? defaultHotlinePoster;
+}
+
+export async function saveHotlinePosterConfig(config: HotlinePosterConfig) {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const footer = config.footer.filter((r) => r.label.trim() && r.value.trim());
+  const cleaned: HotlinePosterConfig = { ...config, footer };
+
+  const parsed = parseHotlinePosterConfig(cleaned);
+  if (!parsed) {
+    throw new Error('Invalid poster configuration. Check all required fields and footer rows.');
+  }
+
+  const { error } = await supabase.from('hotline_poster_config').upsert(
+    {
+      id: 1,
+      config: parsed,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'id' },
+  );
 
   if (error) {
     throw error;

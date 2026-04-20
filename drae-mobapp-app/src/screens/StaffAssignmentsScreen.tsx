@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   StyleSheet,
   Text,
@@ -16,7 +17,9 @@ import { AppleRefreshControl } from '../components/AppleRefreshControl';
 import { useAppData } from '../context/AppDataContext';
 import {
   fetchStaffAssignments,
+  resolveStaffAssignment,
   StaffAssignmentReport,
+  startStaffAssignment,
   subscribeToStaffAssignmentList,
 } from '../services/supabaseService';
 import { formatPhilippineMobileDisplay } from '../utils/phoneFormat';
@@ -43,6 +46,51 @@ export default function StaffAssignmentsScreen() {
   const [reports, setReports] = useState<StaffAssignmentReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionPendingId, setActionPendingId] = useState<string | null>(null);
+
+  const handleAction = async (
+    reportId: string,
+    kind: 'start' | 'resolve',
+  ) => {
+    if (actionPendingId) {
+      return;
+    }
+    setActionPendingId(reportId);
+    try {
+      if (kind === 'start') {
+        await startStaffAssignment(reportId);
+      } else {
+        await resolveStaffAssignment(reportId);
+      }
+      const rows = await fetchStaffAssignments(staffMemberId!);
+      setReports(rows);
+      await refreshStaffAssignmentStats();
+    } catch (err: any) {
+      const msg =
+        err?.message || err?.hint || 'Unable to update the report. Please try again.';
+      Alert.alert(
+        kind === 'start' ? 'Could not start report' : 'Could not resolve report',
+        msg,
+      );
+    } finally {
+      setActionPendingId(null);
+    }
+  };
+
+  const confirmResolve = (reportId: string, hazard: string) => {
+    Alert.alert(
+      'Mark as resolved?',
+      `Confirm this ${hazard || 'report'} has been handled. Once resolved, the next queued report can be dispatched to you.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark resolved',
+          style: 'destructive',
+          onPress: () => void handleAction(reportId, 'resolve'),
+        },
+      ],
+    );
+  };
 
   const load = async (isPull = false) => {
     if (isPull) {
@@ -154,6 +202,44 @@ export default function StaffAssignmentsScreen() {
                 {new Date(item.createdAt).toLocaleString()} • {item.locationText || 'No location'}
               </Text>
               <Text style={styles.description}>{item.description || '—'}</Text>
+              {item.status !== 'resolved' ? (
+                <View style={styles.actionsRow}>
+                  {item.status === 'submitted' ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        styles.actionBtnStart,
+                        actionPendingId === item.id && styles.actionBtnDisabled,
+                      ]}
+                      disabled={actionPendingId === item.id}
+                      onPress={() => void handleAction(item.id, 'start')}
+                    >
+                      {actionPendingId === item.id ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.actionBtnText}>Accept · Start response</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                  {item.status === 'in_progress' ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        styles.actionBtnResolve,
+                        actionPendingId === item.id && styles.actionBtnDisabled,
+                      ]}
+                      disabled={actionPendingId === item.id}
+                      onPress={() => confirmResolve(item.id, item.hazardType)}
+                    >
+                      {actionPendingId === item.id ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.actionBtnText}>Mark as resolved</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
             </View>
           )}
         />
@@ -266,5 +352,33 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     lineHeight: 20,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  actionBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtnStart: {
+    backgroundColor: '#B54708',
+  },
+  actionBtnResolve: {
+    backgroundColor: colors.primary,
+  },
+  actionBtnDisabled: {
+    opacity: 0.6,
+  },
+  actionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
 });

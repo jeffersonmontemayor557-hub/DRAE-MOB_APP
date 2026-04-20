@@ -1,3 +1,7 @@
+import { defaultHotlinePoster, type HotlinePosterConfig } from './hotlinePosterConfig';
+
+export type { HotlinePosterConfig } from './hotlinePosterConfig';
+
 export type DisasterStage = 'Before' | 'During' | 'After';
 export type DisasterHazard =
   | 'Landslide'
@@ -461,54 +465,8 @@ export const disasterGuideContent: Record<
   },
 };
 
-/** Official CDRRMO emergency hotline poster (two columns + footer). */
-export const emergencyHotlinePoster = {
-  headerSubtitle: 'CITY DISASTER RISK REDUCTION AND MANAGEMENT OFFICE',
-  headerLocation: 'CITY OF DASMARIÑAS, CAVITE',
-  mainTitle: 'EMERGENCY HOTLINES',
-  tagalogReminder:
-    'Maging mapagmatyag at makipagtulungan, ipagbigay-alam ang mga kaganapan sa inyong mga nasasakupan. Makipag-ugnayan sa mga sumusunod na numero:',
-  leftColumn: [
-    {
-      title: 'EMERGENCY OPERATION CENTER 24 / 7 HOTLINE',
-      lines: ['(046) 435-0183', '(046) 481-0555', '0908-818-5555'],
-    },
-    {
-      title: 'AMBULANCE CENTER / CITY RESCUE GROUP',
-      lines: ['0998-566-5555', '0917-777-5263'],
-    },
-    {
-      title: 'BUREAU OF FIRE PROTECTION',
-      lines: [
-        '(046) 416-0875',
-        '(046) 884-6131',
-        '0998-336-9534',
-        '0992-448-7857',
-        'FB: BFP DASMA FS CAVITE',
-      ],
-    },
-  ],
-  rightColumn: [
-    {
-      title: 'CITY DISASTER RISK REDUCTION AND MANAGEMENT OFFICE',
-      lines: ['(046) 513-1766', '0917-721-8825', '0998-843-5477'],
-    },
-    {
-      title: 'MERALCO',
-      lines: ['0917-551-6211', '0920-971-6211'],
-    },
-    {
-      title: 'PHILIPPINE NATIONAL POLICE',
-      lines: ['(046) 416-0256', '0998-598-5508', '0956-803-3329'],
-    },
-  ],
-  footer: [
-    { label: 'Email', value: 'dasmacity.drrmo@yahoo.com' },
-    { label: 'Mobile', value: '0917-721-8825' },
-    { label: 'Facebook', value: 'Dasmariñas DRRMO' },
-    { label: 'Email', value: 'drrmo.dasmacity@gmail.com' },
-  ],
-};
+/** Official CDRRMO emergency hotline poster (fallback when remote config is unavailable). */
+export const emergencyHotlinePoster: HotlinePosterConfig = defaultHotlinePoster;
 
 /** Legacy flat list (optional use); poster above is authoritative. */
 export const emergencyHotlineSections = [
@@ -575,15 +533,12 @@ export type EmergencyDialEntry = {
 };
 
 /** All unique dialable numbers from the official hotline poster (for picker / tap-to-call). */
-export function getEmergencyDialList(): EmergencyDialEntry[] {
+export function getEmergencyDialList(poster: HotlinePosterConfig = emergencyHotlinePoster): EmergencyDialEntry[] {
   const seen = new Set<string>();
   const out: EmergencyDialEntry[] = [];
   let n = 0;
 
-  const blocks = [
-    ...emergencyHotlinePoster.leftColumn,
-    ...emergencyHotlinePoster.rightColumn,
-  ];
+  const blocks = [...poster.leftColumn, ...poster.rightColumn];
 
   const shortCat = (title: string): string => {
     if (title.includes('EMERGENCY OPERATION')) {
@@ -625,7 +580,7 @@ export function getEmergencyDialList(): EmergencyDialEntry[] {
     }
   }
 
-  const mobileFooter = emergencyHotlinePoster.footer.find((r) => r.label.toLowerCase() === 'mobile');
+  const mobileFooter = poster.footer.find((r) => r.label.toLowerCase() === 'mobile');
   if (mobileFooter) {
     const digits = getTelDigitsFromHotlineLine(mobileFooter.value);
     if (digits && !seen.has(digits)) {

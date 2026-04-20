@@ -9,12 +9,17 @@ import {
   useRef,
   useState,
 } from 'react';
-import { notifyNewStaffAssignment } from '../services/advisoryNotifications';
+import {
+  notifyNewStaffAssignment,
+  notifyReportAssigned,
+  notifyReportResolved,
+} from '../services/advisoryNotifications';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   countStaffOpenAssignments,
   fetchLatestProfile,
   fetchLatestReadiness,
+  fetchMyIncidentReports,
   fetchProfileByAuthUserId,
   fetchStaffAssignments,
   fetchStaffMemberIdByProfileId,
@@ -23,6 +28,7 @@ import {
   getAuthSession,
   saveReadinessRemote,
   signOutAuth,
+  subscribeToMyIncidentReports,
   subscribeToStaffAssignments,
   tryLinkAuthUserToUnlinkedProfileByEmail,
 } from '../services/supabaseService';
@@ -92,6 +98,10 @@ export function AppDataProvider({ children }: PropsWithChildren) {
   const [mustCompleteProfile, setMustCompleteProfile] = useState(false);
   const staffAssignmentBootstrapDone = useRef(false);
   const knownStaffOpenIdsRef = useRef<Set<string>>(new Set());
+  const myReportsBootstrapDone = useRef(false);
+  const knownMyReportStateRef = useRef<Map<string, { assignedStaffName: string; status: string }>>(
+    new Map(),
+  );
 
   const clearLocalUserData = useCallback(async () => {
     await AsyncStorage.multiRemove([
@@ -110,6 +120,8 @@ export function AppDataProvider({ children }: PropsWithChildren) {
     setMustCompleteProfile(false);
     knownStaffOpenIdsRef.current = new Set();
     staffAssignmentBootstrapDone.current = false;
+    knownMyReportStateRef.current = new Map();
+    myReportsBootstrapDone.current = false;
   }, []);
 
   const signOut = useCallback(async () => {
@@ -298,6 +310,86 @@ export function AppDataProvider({ children }: PropsWithChildren) {
       unsubscribe();
     };
   }, [staffMemberId, syncStaffAssignments]);
+
+  useEffect(() => {
+    if (!profileRecordId) {
+      knownMyReportStateRef.current = new Map();
+      myReportsBootstrapDone.current = false;
+      return;
+    }
+
+    const filter = {
+      profileId: profileRecordId,
+      reporterName: profile.fullName ?? '',
+      reporterContact: profile.contactNumber ?? '',
+    };
+
+    let cancelled = false;
+    myReportsBootstrapDone.current = false;
+
+    const processReports = async (
+      reports: Awaited<ReturnType<typeof fetchMyIncidentReports>>,
+    ) => {
+      if (cancelled) {
+        return;
+      }
+      const prev = knownMyReportStateRef.current;
+      if (myReportsBootstrapDone.current) {
+        for (const r of reports) {
+          const before = prev.get(r.id);
+          const prevAssigned = (before?.assignedStaffName ?? '').trim();
+          const nextAssigned = (r.assignedStaffName ?? '').trim();
+          const prevStatus = (before?.status ?? '').toLowerCase();
+          const nextStatus = (r.status ?? '').toLowerCase();
+
+          if (before && !prevAssigned && nextAssigned) {
+            await notifyReportAssigned({
+              reportId: r.id,
+              hazardType: r.hazardType,
+              assignedStaffName: nextAssigned,
+            });
+          }
+          if (before && prevStatus !== 'resolved' && nextStatus === 'resolved') {
+            await notifyReportResolved({
+              reportId: r.id,
+              hazardType: r.hazardType,
+            });
+          }
+        }
+      }
+      knownMyReportStateRef.current = new Map(
+        reports.map((r) => [
+          r.id,
+          {
+            assignedStaffName: r.assignedStaffName ?? '',
+            status: r.status ?? '',
+          },
+        ]),
+      );
+      myReportsBootstrapDone.current = true;
+    };
+
+    const bootstrap = async () => {
+      try {
+        const initial = await fetchMyIncidentReports(filter);
+        await processReports(initial);
+      } catch (err) {
+        console.warn('resident report bootstrap failed', err);
+        myReportsBootstrapDone.current = true;
+      }
+    };
+
+    void bootstrap();
+
+    const unsubscribe = subscribeToMyIncidentReports(filter, (rows) => {
+      void processReports(rows);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [profileRecordId, profile.fullName, profile.contactNumber]);
 
   const refreshStaffAssignmentStats = useCallback(async () => {
     if (!staffMemberId) {

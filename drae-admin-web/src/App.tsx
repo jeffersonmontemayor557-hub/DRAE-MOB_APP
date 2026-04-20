@@ -1,12 +1,16 @@
 import type { Session } from '@supabase/supabase-js';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { AdminAccessDenied } from './components/AdminAccessDenied';
 import { AdminLoginScreen } from './components/AdminLoginScreen';
 import { AdminMustChangePasswordPanel } from './components/AdminMustChangePasswordPanel';
 import { AppModal } from './components/AppModal';
+import { HotlinePosterEditor } from './components/HotlinePosterEditor';
 import { ResidentEditor } from './components/ResidentEditor';
+import { ResidentProfileView } from './components/ResidentProfileView';
 import { StaffEditor } from './components/StaffEditor';
+import { defaultHotlinePoster, type HotlinePosterConfig } from './lib/hotlinePosterConfig';
+import { formatDate } from './lib/formatDate';
 import { formatPhilippineMobileDisplay } from './lib/phoneFormat';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import {
@@ -23,10 +27,12 @@ import {
   getAdvisories,
   getDashboardStats,
   getHotlines,
+  getHotlinePosterConfig,
   getReports,
   getResidentsWithReadiness,
   getStaffMembers,
   saveHotline,
+  saveHotlinePosterConfig,
   toggleAdvisoryActive,
   updateReportAssignment,
   updateReportStatus,
@@ -163,18 +169,6 @@ function csvEscapeCell(value: string): string {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
-}
-
-function formatDate(dateString: string) {
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) {
-    return '-';
-  }
-  return date.toLocaleDateString('en-PH', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-  });
 }
 
 function formatShortDate(dateString: string) {
@@ -447,6 +441,8 @@ function DashboardApp({ session }: { session: Session }) {
     phone: '',
     priority: '1',
   });
+  const [hotlinePosterConfig, setHotlinePosterConfig] = useState<HotlinePosterConfig>(defaultHotlinePoster);
+  const [hotlinePosterSaving, setHotlinePosterSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [usersInviteEmail, setUsersInviteEmail] = useState('');
   const [usersInviteBusy, setUsersInviteBusy] = useState(false);
@@ -468,8 +464,8 @@ function DashboardApp({ session }: { session: Session }) {
   const [staffInviteLastTempPassword, setStaffInviteLastTempPassword] = useState<string | null>(null);
   const [residentFormBusy, setResidentFormBusy] = useState(false);
   const [staffFormBusy, setStaffFormBusy] = useState(false);
-  /** Accordion: one expanded resident row at a time for less visual clutter. */
-  const [expandedResidentId, setExpandedResidentId] = useState<string | null>(null);
+  /** Read-only profile panel (replaces in-table accordion). */
+  const [residentViewModal, setResidentViewModal] = useState<ResidentWithReadiness | null>(null);
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberFilterGoBag, setMemberFilterGoBag] = useState<'all' | 'yes' | 'no'>('all');
   const [memberFilterApp, setMemberFilterApp] = useState<'all' | 'yes' | 'no'>('all');
@@ -541,7 +537,7 @@ function DashboardApp({ session }: { session: Session }) {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [statsData, memberRows, reportRows, advisoryRows, hotlineRows, staffRows] =
+      const [statsData, memberRows, reportRows, advisoryRows, hotlineRows, staffRows, posterCfg] =
         await Promise.all([
           getDashboardStats(),
           getResidentsWithReadiness(),
@@ -549,6 +545,7 @@ function DashboardApp({ session }: { session: Session }) {
           getAdvisories(),
           getHotlines(),
           getStaffMembers(),
+          getHotlinePosterConfig(),
         ]);
       setStats(statsData);
       setMembers(memberRows);
@@ -556,6 +553,7 @@ function DashboardApp({ session }: { session: Session }) {
       setAdvisories(advisoryRows);
       setHotlines(hotlineRows);
       setStaffMembers(staffRows);
+      setHotlinePosterConfig(posterCfg);
     } finally {
       setLoading(false);
     }
@@ -791,6 +789,19 @@ function DashboardApp({ session }: { session: Session }) {
     const rows = await getHotlines();
     setHotlines(rows);
     setStats(await getDashboardStats());
+  };
+
+  const handleSaveHotlinePoster = async () => {
+    try {
+      setHotlinePosterSaving(true);
+      await saveHotlinePosterConfig(hotlinePosterConfig);
+      setStats(await getDashboardStats());
+      window.alert('Hotline poster saved. Residents will see it under Guides → Emergency Hotlines after refresh.');
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not save poster.');
+    } finally {
+      setHotlinePosterSaving(false);
+    }
   };
 
   const handleSaveResident = async (input: ResidentInput) => {
@@ -1407,7 +1418,7 @@ function DashboardApp({ session }: { session: Session }) {
                       <th>Readiness</th>
                       <th>Go-bag</th>
                       <th>App login</th>
-                      <th />
+                      <th>View</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -1428,116 +1439,65 @@ function DashboardApp({ session }: { session: Session }) {
                       </tr>
                     ) : (
                       memberFilteredRows.map((row) => (
-                        <Fragment key={row.id}>
-                          <tr>
-                            <td>
-                              {row.avatar_url ? (
-                                <img
-                                  className="resident-avatar"
-                                  src={row.avatar_url}
-                                  alt={row.full_name ? `Photo of ${row.full_name}` : 'Resident photo'}
-                                />
-                              ) : (
-                                <span className="muted-text">—</span>
-                              )}
-                            </td>
-                            <td>
-                              <span className="resident-name-cell">{row.full_name || '—'}</span>
-                            </td>
-                            <td>
-                              {row.contact_number
-                                ? formatPhilippineMobileDisplay(row.contact_number)
-                                : '—'}
-                            </td>
-                            <td>{row.readiness_score != null ? `${row.readiness_score}%` : '—'}</td>
-                            <td>
-                              <span className={row.go_bag_ready ? 'pill-yes' : 'pill-no'}>
-                                {row.go_bag_ready ? 'Yes' : 'No'}
-                              </span>
-                            </td>
-                            <td>
-                              <span className={row.user_id ? 'pill-yes' : 'pill-no'}>
-                                {row.user_id ? 'Yes' : 'No'}
-                              </span>
-                            </td>
-                            <td>
+                        <tr key={row.id}>
+                          <td>
+                            {row.avatar_url ? (
+                              <img
+                                className="resident-avatar"
+                                src={row.avatar_url}
+                                alt={row.full_name ? `Photo of ${row.full_name}` : 'Resident photo'}
+                              />
+                            ) : (
+                              <span className="muted-text">—</span>
+                            )}
+                          </td>
+                          <td>
+                            <span className="resident-name-cell">{row.full_name || '—'}</span>
+                          </td>
+                          <td>
+                            {row.contact_number
+                              ? formatPhilippineMobileDisplay(row.contact_number)
+                              : '—'}
+                          </td>
+                          <td>{row.readiness_score != null ? `${row.readiness_score}%` : '—'}</td>
+                          <td>
+                            <span className={row.go_bag_ready ? 'pill-yes' : 'pill-no'}>
+                              {row.go_bag_ready ? 'Yes' : 'No'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={row.user_id ? 'pill-yes' : 'pill-no'}>
+                              {row.user_id ? 'Yes' : 'No'}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="action-button secondary table-action-btn"
+                              onClick={() => setResidentViewModal(row)}
+                            >
+                              View
+                            </button>
+                          </td>
+                          <td>
+                            <div className="table-actions">
                               <button
                                 type="button"
-                                className="linkish-button"
-                                onClick={() =>
-                                  setExpandedResidentId((id) => (id === row.id ? null : row.id))
-                                }
-                                aria-expanded={expandedResidentId === row.id}
+                                className="action-button secondary table-action-btn"
+                                onClick={() => setResidentModal({ mode: 'edit', row })}
                               >
-                                {expandedResidentId === row.id ? 'Hide' : 'More'}
+                                Edit
                               </button>
-                            </td>
-                            <td>
-                              <div className="table-actions">
-                                <button
-                                  type="button"
-                                  className="action-button secondary table-action-btn"
-                                  onClick={() => setResidentModal({ mode: 'edit', row })}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  className="action-button danger table-action-btn"
-                                  onClick={() => void handleDeleteResident(row)}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                          {expandedResidentId === row.id ? (
-                            <tr className="resident-detail-tr">
-                              <td colSpan={8}>
-                                <div className="resident-detail-panel" role="region" aria-label="Full resident details">
-                                  <div className="resident-detail-grid">
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Address</span>
-                                      <span className="resident-detail-value">{row.address || '—'}</span>
-                                    </div>
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Email</span>
-                                      <span className="resident-detail-value">{row.email || '—'}</span>
-                                    </div>
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Gender</span>
-                                      <span className="resident-detail-value">{row.gender || '—'}</span>
-                                    </div>
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Age</span>
-                                      <span className="resident-detail-value">
-                                        {row.age != null ? String(row.age) : '—'}
-                                      </span>
-                                    </div>
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Emergency contact</span>
-                                      <span className="resident-detail-value">{row.contact_person || '—'}</span>
-                                    </div>
-                                    <div className="resident-detail-item">
-                                      <span className="resident-detail-label">Emergency phone</span>
-                                      <span className="resident-detail-value">
-                                        {row.contact_person_number
-                                          ? formatPhilippineMobileDisplay(row.contact_person_number)
-                                          : '—'}
-                                      </span>
-                                    </div>
-                                    <div className="resident-detail-item resident-detail-item--wide">
-                                      <span className="resident-detail-label">Readiness last updated</span>
-                                      <span className="resident-detail-value">
-                                        {row.readiness_updated_at ? formatDate(row.readiness_updated_at) : '—'}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          ) : null}
-                        </Fragment>
+                              <button
+                                type="button"
+                                className="action-button danger table-action-btn"
+                                onClick={() => void handleDeleteResident(row)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
                       ))
                     )}
                   </tbody>
@@ -2352,6 +2312,30 @@ function DashboardApp({ session }: { session: Session }) {
           ) : (
             <section className="panel">
               <h2>Emergency hotlines</h2>
+              <p className="muted-text" style={{ marginTop: 0 }}>
+                <strong>Guides poster</strong> — full two-column layout shown in the mobile app (Guides → Emergency
+                Hotlines). Edit sections and lines below, then save.
+              </p>
+              <HotlinePosterEditor
+                value={hotlinePosterConfig}
+                onChange={setHotlinePosterConfig}
+                disabled={hotlinePosterSaving || loading}
+              />
+              <div style={{ marginTop: 16, marginBottom: 24 }}>
+                <button
+                  type="button"
+                  className="action-button"
+                  disabled={hotlinePosterSaving || loading}
+                  onClick={() => void handleSaveHotlinePoster()}
+                >
+                  {hotlinePosterSaving ? 'Saving poster…' : 'Save hotline poster'}
+                </button>
+              </div>
+
+              <h3 style={{ marginBottom: 8 }}>Quick dial list (Emergency tab)</h3>
+              <p className="muted-text" style={{ marginTop: 0 }}>
+                Extra numbers here are merged into the Emergency tab dial picker. Label does not need to be unique.
+              </p>
               <div className="advisory-form">
                 <div className="form-row hotline-grid">
                   <input
@@ -2443,6 +2427,23 @@ function DashboardApp({ session }: { session: Session }) {
         </div>
       </main>
 
+      {residentViewModal ? (
+        <AppModal
+          title="Resident profile"
+          size="wide"
+          onClose={() => setResidentViewModal(null)}
+        >
+          <ResidentProfileView
+            resident={residentViewModal}
+            onClose={() => setResidentViewModal(null)}
+            onEdit={() => {
+              const r = residentViewModal;
+              setResidentViewModal(null);
+              setResidentModal({ mode: 'edit', row: r });
+            }}
+          />
+        </AppModal>
+      ) : null}
       {residentModal ? (
         <AppModal
           title={residentModal.mode === 'create' ? 'Add resident' : 'Edit resident'}

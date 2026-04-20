@@ -10,6 +10,7 @@ import {
   type DisasterHazard,
   type DisasterStage,
 } from '../data/disasterContent';
+import type { HotlinePosterConfig } from '../data/hotlinePosterConfig';
 
 const cityLogo = require('../../assets/city-logo.png');
 const cdrLogo = require('../../assets/cdr-logo.png');
@@ -25,6 +26,8 @@ type Props = {
   allTips: GuideTip[];
   introLine?: BilingualLine;
   goBagItems: BilingualLine[];
+  /** When omitted, built-in defaults are used (export matches on-screen poster if passed from Guides). */
+  hotlinePoster?: HotlinePosterConfig;
 };
 
 const hazardMenuLabels: { key: DisasterHazard; label: string }[] = [
@@ -40,9 +43,10 @@ const hazardMenuLabels: { key: DisasterHazard; label: string }[] = [
  * Fixed width 1080px — scaled for crisp gallery saves.
  */
 const InfographicPngExport = forwardRef<View, Props>(function InfographicPngExport(
-  { view, selectedHazard, stage, allTips, introLine, goBagItems },
+  { view, selectedHazard, stage, allTips, introLine, goBagItems, hotlinePoster },
   ref,
 ) {
+  const poster = hotlinePoster ?? emergencyHotlinePoster;
   return (
     <View ref={ref} style={styles.root} collapsable={false}>
       {view === 'guide' ? (
@@ -120,17 +124,17 @@ const InfographicPngExport = forwardRef<View, Props>(function InfographicPngExpo
             <Image source={cityLogo} style={styles.hotLogo} resizeMode="contain" />
             <Image source={cdrLogo} style={styles.hotLogo} resizeMode="contain" />
           </View>
-          <Text style={styles.hotOffice}>{emergencyHotlinePoster.headerSubtitle}</Text>
-          <Text style={styles.hotCity}>{emergencyHotlinePoster.headerLocation}</Text>
+          <Text style={styles.hotOffice}>{poster.headerSubtitle}</Text>
+          <Text style={styles.hotCity}>{poster.headerLocation}</Text>
           <View style={styles.hotTitleBar}>
             <View style={styles.hotLine} />
-            <Text style={styles.hotTitle}>{emergencyHotlinePoster.mainTitle}</Text>
+            <Text style={styles.hotTitle}>{poster.mainTitle}</Text>
             <View style={styles.hotLine} />
           </View>
-          <Text style={styles.hotTagalog}>{emergencyHotlinePoster.tagalogReminder}</Text>
+          <Text style={styles.hotTagalog}>{poster.tagalogReminder}</Text>
           <View style={styles.hotCols}>
             <View style={styles.hotCol}>
-              {emergencyHotlinePoster.leftColumn.map((block) => (
+              {poster.leftColumn.map((block) => (
                 <View key={block.title} style={styles.hotBlock}>
                   <Text style={styles.hotBlockTitle}>{block.title}</Text>
                   {block.lines.map((line) => (
@@ -142,7 +146,7 @@ const InfographicPngExport = forwardRef<View, Props>(function InfographicPngExpo
               ))}
             </View>
             <View style={styles.hotCol}>
-              {emergencyHotlinePoster.rightColumn.map((block) => (
+              {poster.rightColumn.map((block) => (
                 <View key={block.title} style={styles.hotBlock}>
                   <Text style={styles.hotBlockTitle}>{block.title}</Text>
                   {block.lines.map((line) => (
@@ -155,7 +159,7 @@ const InfographicPngExport = forwardRef<View, Props>(function InfographicPngExpo
             </View>
           </View>
           <View style={styles.hotFooterBox}>
-            {emergencyHotlinePoster.footer.map((row, i) => (
+            {poster.footer.map((row, i) => (
               <Text key={i} style={styles.hotFooterLine}>
                 {row.label}: {row.value}
               </Text>

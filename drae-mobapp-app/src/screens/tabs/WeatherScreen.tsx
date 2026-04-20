@@ -1,4 +1,4 @@
-﻿import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,

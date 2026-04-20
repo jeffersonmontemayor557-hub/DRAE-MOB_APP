@@ -21,10 +21,10 @@ import { AppleRefreshControl } from '../../components/AppleRefreshControl';
 import InfographicPngExport, { EXPORT_WIDTH, type InfoView } from '../../components/InfographicPngExport';
 import { alertPermissionBlocked, confirmPermissionStep } from '../../utils/permissionDialogs';
 import { getAdaptiveTips, type GuideContext } from '../../data/adaptiveGuidance';
+import { defaultHotlinePoster, type HotlinePosterConfig } from '../../data/hotlinePosterConfig';
 import {
   disasterGuideContent,
   DisasterHazard,
-  emergencyHotlinePoster,
   getTelDigitsFromHotlineLine,
   goBagChecklist,
   type GuideTip,
@@ -35,6 +35,7 @@ import {
   stageLabels,
   stageOrder,
 } from '../../data/disasterContent';
+import { fetchHotlinePosterConfig } from '../../services/supabaseService';
 import { apple } from '../../theme/apple';
 import { colors } from '../../theme/colors';
 
@@ -82,11 +83,25 @@ export default function InfographicScreen() {
   });
   const adaptiveTips = useMemo(() => getAdaptiveTips(adaptiveCtx), [adaptiveCtx]);
 
+  const [hotlinePoster, setHotlinePoster] = useState<HotlinePosterConfig>(defaultHotlinePoster);
+
+  const loadHotlinePoster = useCallback(async () => {
+    const remote = await fetchHotlinePosterConfig();
+    if (remote) {
+      setHotlinePoster(remote);
+    }
+  }, []);
+
   const onListRefresh = useCallback(async () => {
     setListRefreshing(true);
+    await loadHotlinePoster();
     await new Promise<void>((resolve) => setTimeout(resolve, 400));
     setListRefreshing(false);
-  }, []);
+  }, [loadHotlinePoster]);
+
+  useEffect(() => {
+    void loadHotlinePoster();
+  }, [loadHotlinePoster]);
 
   useEffect(() => {
     setStageIndex(0);
@@ -216,7 +231,15 @@ export default function InfographicScreen() {
               </View>
               <View style={styles.menuGreenBand} />
               <Text style={styles.menuKicker}>CDRRMO Dasmariñas</Text>
-              <Text style={styles.menuTitle}>PREPAREDNESS{'\n'}GUIDEBOOK</Text>
+              <Text
+                style={styles.menuTitle}
+                numberOfLines={2}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                maxFontSizeMultiplier={1.35}
+              >
+                PREPAREDNESS{'\n'}GUIDEBOOK
+              </Text>
               <Text style={styles.menuSub}>Select a hazard to view Before, During, and After tips.</Text>
 
               <View style={styles.adaptiveCard}>
@@ -483,20 +506,20 @@ export default function InfographicScreen() {
                 <Image source={cityLogo} style={styles.posterLogo} resizeMode="contain" />
                 <Image source={cdrLogo} style={styles.posterLogo} resizeMode="contain" />
               </View>
-              <Text style={styles.hotlineOfficeLine}>{emergencyHotlinePoster.headerSubtitle}</Text>
-              <Text style={styles.hotlineCityLine}>{emergencyHotlinePoster.headerLocation}</Text>
+              <Text style={styles.hotlineOfficeLine}>{hotlinePoster.headerSubtitle}</Text>
+              <Text style={styles.hotlineCityLine}>{hotlinePoster.headerLocation}</Text>
 
               <View style={styles.hotlineTitleWrap}>
                 <View style={styles.hotlineTitleLine} />
-                <Text style={styles.hotlineMainTitle}>{emergencyHotlinePoster.mainTitle}</Text>
+                <Text style={styles.hotlineMainTitle}>{hotlinePoster.mainTitle}</Text>
                 <View style={styles.hotlineTitleLine} />
               </View>
 
-              <Text style={styles.hotlineTagalog}>{emergencyHotlinePoster.tagalogReminder}</Text>
+              <Text style={styles.hotlineTagalog}>{hotlinePoster.tagalogReminder}</Text>
 
               <View style={styles.hotlineTwoCol}>
                 <View style={styles.hotlineCol}>
-                  {emergencyHotlinePoster.leftColumn.map((block) => (
+                  {hotlinePoster.leftColumn.map((block) => (
                     <View key={block.title} style={styles.hotlineBlock}>
                       <Text style={styles.hotlineBlockTitle}>{block.title}</Text>
                       {block.lines.map((line, idx) => {
@@ -522,7 +545,7 @@ export default function InfographicScreen() {
                   ))}
                 </View>
                 <View style={styles.hotlineCol}>
-                  {emergencyHotlinePoster.rightColumn.map((block) => (
+                  {hotlinePoster.rightColumn.map((block) => (
                     <View key={block.title} style={styles.hotlineBlock}>
                       <Text style={styles.hotlineBlockTitle}>{block.title}</Text>
                       {block.lines.map((line, idx) => {
@@ -550,7 +573,7 @@ export default function InfographicScreen() {
               </View>
 
               <View style={styles.hotlineFooter}>
-                {emergencyHotlinePoster.footer.map((row, i) => {
+                {hotlinePoster.footer.map((row, i) => {
                   const key = `${row.label}-${i}`;
                   const labelLower = row.label.toLowerCase();
                   if (labelLower === 'email') {
@@ -655,6 +678,7 @@ export default function InfographicScreen() {
           allTips={allTips}
           introLine={introLine}
           goBagItems={goBagChecklist}
+          hotlinePoster={hotlinePoster}
         />
       </View>
     </SafeAreaView>
@@ -719,13 +743,16 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   menuTitle: {
+    alignSelf: 'stretch',
+    width: '100%',
     textAlign: 'center',
     color: apple.label,
-    fontSize: apple.infographic.titleLarge,
+    /** Slightly below titleLarge so “PREPAREDNESS” fits one line on small widths; adjustsFontSizeToFit scales down if needed. */
+    fontSize: 30,
     fontWeight: '700',
     marginTop: 8,
     marginBottom: 8,
-    lineHeight: 40,
+    lineHeight: 36,
   },
   menuSub: {
     textAlign: 'center',
